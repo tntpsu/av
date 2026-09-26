@@ -235,6 +235,65 @@ so no re-freeze of that file is needed. Same class as [[feedback_diagnostic_labe
 the `radar_fwd_reject_reason` "missing field" error: the honest signal existed
 and nothing read it.
 
+### T-ACC-DRAG — `speed_drag_gain` is an artificial brake; ego settles 0.35 m/s under every target (2026-09-26)
+
+`LongitudinalController` subtracts `speed_drag_gain × v` (0.035 base, 0.020 hill
+overlay) from the desired acceleration as a "drag" feed-forward. The plant has
+no drag to compensate — `CarController.cs` sets `rb.drag = 0` — so with the
+P-only speed loop (`speed_error_gain_under` 0.12) it is a steady-state offset:
+break-even error = 0.29·v. The under-target clamp at 0.5 m/s stops it going
+negative, so the ego parks ~0.35 m/s below any target it cannot reach by
+grade FF. Harness (production controller): target 12 → 11.67, 6.4 → 6.05;
+`speed_drag_gain=0` → 11.96 / 6.32. Night 45 A1: ego 11.36 vs planned 11.80 vs
+a 12.0 lead → lead left radar range at t≈138 s. Physics-first: remove it (0.0)
+in base and the hill overlay. **Unity A/B 2026-09-26, 5 pairs each, 60 s:**
+
+| | drag 0.035 (A) | drag 0.0 (B) |
+|---|---|---|
+| highway_65 shortfall below target | +0.44 m/s (5/5) | **+0.14 m/s** (5/5) |
+| highway_65 util vs allowed / lateral RMSE | 0.91 / 0.039 m | 0.94 / 0.045 m |
+| mixed_radius mean speed / util | 9.39 m/s / 0.74 | **9.78 m/s / 0.78** |
+| mixed_radius lateral RMSE / steering jerk max | 0.112 m / 10.3 | 0.123 m / 11.3 |
+| e-stops, out-of-lane | 0 / 0 | 0 / 0 |
+| mixed_radius Overall / Trajectory (fresh, analyze_drive_overall) | 98.7 / **95.1** | 98.3 / **94.6** |
+
+**Applied:** base and hill overlay → 0.0 (kill-switch: 0.035). **Note the gate
+consequence:** the slower car passed mixed_radius's Trajectory ≥ 95 by 0.1; the
+correctly-driven car misses it by 0.4 (the frozen Aug-13 golden also reads 94.6).
+The 95.1 was bought with 4 % under-speed — the exact trap
+`project_speed_utilization_metric` warns about. Reverting to 0.035 to recover
+it is a legitimate but explicit choice. The lateral cost
+on the curved track (+0.011 m, inside the ±0.03 tolerance) is the PP tracking
+ceiling at 4 % more speed — previously hidden because the car drove slower than
+commanded. Expect fresh mixed_radius/s_loop Trajectory to read ~0.5 lower than
+the frozen Aug-13 goldens for that reason; that is T-GOV-TRACKING-BUDGET-SPEED
+and the PP→LMPC item, not a regression of this change.
+
+### T-ACC-RMSE-GATE — "gap RMSE ≤ 0.5 m" compared the wrong quantity (2026-09-26; FIXED)
+
+H7/G1/A1 gated whole-run gap RMSE vs `s* = s0 + v·T`. IDM's equilibrium is
+`s*/√(1−(v/v0)⁴)` — 1.3× s* on G1, 1.8× on H7, 2.5× on A1 — and the startup
+catch-up is included. Pool post-convergence RMSE vs s*: 17–24 m on every steady
+scenario; the gate was unreachable by construction and produced 12 nights of
+H7 FAILs on a 93.7 GREEN run. `acc_pipeline_analysis` Card 2 now prints
+**Post-conv RMSE vs EQ** (from the first ACC frame within max(2 m, 20 %) of
+`acc_idm_equilibrium_gap_m`) with `ACC_GAP_RMSE_POST_CONV_GATE_M = 10.0`,
+calibrated from the healthy pool (H2 4.5, H4 4.5, H5 4.3, H6 5.5, H3 7.5, G2
+6.2; G1 8.0, H7 9.4 now PASS; H8's 37 %-detection-loss run 22.7 FAILs). The
+three `Expected:` lines were rewritten; the PROMPT gates on the new line.
+Tighten toward 5 m once T-ACC-EQ-BIAS is fixed.
+
+### T-ACC-EQ-BIAS — ego follows 3–5 m further than IDM's own equilibrium (2026-09-26)
+
+Post-convergence median (gap − EQ) is +3.1 (H2, H4), +2.2 (H5), +4.3 (H6),
++5.0 (H3), +5.3 (H7), +5.5 (G1); G2 −0.4. Present on every following scenario
+regardless of track, so it is not a scenario problem. The harness converges to
+EQ exactly, so it lives in something the harness idealises: the ACC dt hardcode
+(integration at 43 % — T-ACC-DT-HARDCODE, kill-switch now wired), the α=0.3 gap
+EMA lag at 13 FPS, or radar noise. Test the dt flag first (A/B on H5, the most
+dynamic follower), then the EMA. Not the drag term — the harness shows drag does
+not bias the following gap, only free-flow.
+
 ### T-ACC-DT-HARDCODE — ACC stepped with dt=1/30 while frames arrive at 1/13 (2026-09-22)
 
 `av_stack/orchestrator.py:9864` — `dt = 1.0 / 30.0  # governor does not expose
@@ -245,6 +304,13 @@ Quantified by `test_acc_dt_hardcode_slows_idm_integration_2p3x`. Not the G2
 cause (harness: correcting it alone changes nothing) but it is the same bug
 class as `ceeba44` (sign-flip rate inflated by hardcoded 30 FPS). Pass
 `fv['control_dt']` like the longitudinal controller already receives.
+
+**Wired 2026-09-26 behind `acc.use_measured_dt` (code default false):** the
+frame stage stashes `self._last_control_dt`; the ACC stage uses it when the flag
+is on (clamped to 10–250 ms so a stalled frame cannot integrate a giant step).
+Harness honours the flag (`acc_dt=None` → cfg). Enabling it changes every ACC
+time constant ×2.3 toward design → A/B on H5 (stop-go) and G2 before flipping
+the base config; candidate fix for T-ACC-EQ-BIAS.
 
 ### T-ACC-EB-STANDSTILL — EMERGENCY_BRAKE never releases at standstill (2026-09-22; FIXED + Unity A/B VERIFIED 2026-09-23)
 
@@ -293,7 +359,9 @@ at accepted frames are 0.1–5.9°; the rejections are `out_of_range` because th
 lead outruns the ego. The nightly agent's 11-night "heading-delta cluster"
 narrative is refuted (memory banner added).
 - **A1:** lead 20 m/s vs ego target 12 m/s → `out_of_range` 96 %. Spec mismatch.
-  Decision: lower the A1 lead to ≤ 12 m/s or park the scenario for NMPC/high-speed.
+  Lead → 12 (09-25) then → 11.5 (09-26): at 12 the ego ran 11.36 (planner bias −0.2
+  plus the drag shortfall, T-ACC-DRAG) and still lost the lead at t≈138 s. A steady-
+  following scenario needs the lead below the ego's free-flow.
 - **G1:** ego governed to **6.4–6.6 m/s for the whole lap** (curve cap active 100 %,
   same on the lead-free hill_highway golden) vs a 10 m/s lead → gap > 150 m by
   t≈80 s; `opposite_direction` 33 % is the lead 326 m around the loop, correctly

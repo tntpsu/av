@@ -5,7 +5,9 @@
 # EMERGENCY_BRAKE fires when gap < 1.5×ego (fires at gap~13.5m). With the fixed EB
 # compounding (v_target_prev - 4×dt instead of ego - 4×dt), target compounds downward
 # ~0.133m/s per frame → growing speed error → proportional braking ramps up.
-# Expected: IDM decelerates to 5 m/s; TTC min ≥ 2.0s; no collision; gap converges to ~9.5m.
+# Expected: IDM decelerates to 5 m/s; TTC min ≥ 2.0s; no collision; gap converges to the IDM equilibrium
+#   (s0 + v·T with T=2.5 on this overlay ≈ 14.5m at 5 m/s, ×1/sqrt(1-(v/v0)^4); ~9.5m was a T=1.5 estimate
+#   that predates the overlay and the bumper-frame radar offset — corrected 2026-09-26).
 # base: tracks/highway_65.yml
 
 name: highway_65

@@ -2,7 +2,8 @@
 # Lead at 25m arc-distance, constant 5.5 m/s (was 10 m/s until 2026-09-25). Ego target 12 m/s.
 # Tests ACC across uphill (5% grade) and downhill (-5% grade) segments.
 # Grade FF should not fight ACC deceleration; net behavior stable on all grades.
-# Expected: ACC active across full lap; grade FF + ACC coexist; gap RMSE ≤ 0.5m.
+# Expected: ACC active across full lap; grade FF + ACC coexist; post-convergence gap RMSE vs IDM equilibrium ≤ 10m.
+#   (was "gap RMSE ≤ 0.5m" until 2026-09-26 — see T-ACC-RMSE-GATE; EQ/s* ≈ 1.3 here.)
 # base: tracks/hill_highway.yml
 #
 # LEAD SPEED IS BOUNDED BY THE EGO, NOT BY THIS SCENARIO (T-GOV-TRACKING-BUDGET-SPEED):

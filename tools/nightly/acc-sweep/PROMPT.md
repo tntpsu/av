@@ -167,6 +167,26 @@ Keep these exact shapes or the email degrades to the raw text:
   of the email — write them as things a human can do tomorrow, not restatements of
   the failure.
 
+## Gap-RMSE verdicts and grouping FAILs — read before writing "Root cause"
+
+1. **Gate on `Post-conv RMSE vs EQ`, not `Gap Error RMSE`.** Card 2 now prints
+   both. The old whole-run RMSE vs s* was unreachable by construction (IDM
+   settles at s*/√(1−(v/v0)⁴); pool 17–24 m post-convergence on every steady
+   scenario). H7/G1/A1 `Expected:` lines say "post-convergence gap RMSE vs IDM
+   equilibrium ≤ 10m" since 2026-09-26. "n/a — never converged" is itself a
+   finding (report why: detection loss, lead outran ego, run too short).
+2. **Mechanism before grouping.** Three FAILs with the same *symptom* are not one
+   cause. Before writing "same class as X", compare for each scenario:
+   `acc_target_speed_mps` vs `target_speed_final` (is the ego being CAPPED below
+   what ACC asks for → governor/tracking-budget problem), the sign of
+   `acc_idm_accel_mps2` (asking to close but not closing → longitudinal
+   authority problem), and `acc_idm_equilibrium_gap_m` vs the gap (at
+   equilibrium → gate/spec problem). Night 45 grouped H7 (gate wording), A1
+   (ego 0.35 m/s under target: speed_drag_gain, T-ACC-DRAG) and G1 (IDM
+   equilibrium ≈ 1.3×s*) as "one uncalibrated-gate group"; only H7 was.
+3. **A standing `bias (gap−EQ)` of +3–5 m is T-ACC-EQ-BIAS**, present on every
+   scenario — report it, do not attribute it to the scenario under review.
+
 ## Detection-rate verdicts — read before FAILing anything on detection
 
 1. **Gate only on what the scenario's `Expected:` line names.** `acc_pipeline_analysis`

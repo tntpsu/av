@@ -1,7 +1,10 @@
 # H7 — Straight catch-up (highway_65)
 # Lead at 30m arc-distance, slower constant 10 m/s. Ego target 15 m/s (5 m/s closing speed).
 # Tests catch-up on the 550m straight then steady follow at IDM equilibrium.
-# Expected: gap closes in ~20s; steady follow after; gap RMSE ≤ 0.5m.
+# Expected: gap closes in ~20s; steady follow after; post-convergence gap RMSE vs IDM equilibrium ≤ 10m.
+#   (was "gap RMSE ≤ 0.5m" until 2026-09-26: that compared the whole run, startup included, against s*;
+#   IDM settles at s*/sqrt(1-(v/v0)^4) ≈ 1.8×s* here, so it was unreachable by construction. Card 2
+#   "Post-conv RMSE vs EQ" is the gated number. T-ACC-RMSE-GATE.)
 # base: tracks/highway_65.yml
 
 name: highway_65

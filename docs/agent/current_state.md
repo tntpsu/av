@@ -1,7 +1,26 @@
 # AV Stack — Agent Memory: Current State
 
-**Last updated:** 2026-09-25
+**Last updated:** 2026-09-26
 **Current milestone:** S2-M1 — **5 of 5 tracks still meeting all-layers-≥95 goal.** ACC emergency brake authority restored on G2 (885 → 2 e-stops, 99.8% reduction) via plan `acc-idm-accel-plumbing.md`. Frenet-frame MPC reference remains in shadow-mode.
+
+### Session 2026-09-26 — night 45 review: G1 detection fixed; gap gate rebuilt; drag term A/B'd
+
+Night 45 (first on Sonnet 5; new email format rendered): G1 detection 12.6 % →
+100 %, ACC active the whole lap (11 nights of "structural FAIL" ended by the
+lead re-spec); A1 detection 5 % → 45 % with the ego now visibly parking at
+11.36 vs a 12.0 lead; `sweeping_highway` +6.9 artifact gone; Util column live.
+The agent grouped H7/G1/A1 as "one gate problem" — refuted per mechanism.
+
+**Fixed / changed today:** (1) `Post-conv RMSE vs EQ` metric + 10 m gate in
+`acc_pipeline_analysis` — the old ≤ 0.5 m vs s* was unreachable by
+construction (IDM equilibrium is 1.3–2.5× s*); H7/G1/A1 `Expected:` rewritten,
+G1 and H7 now PASS it (8.0 / 9.4). (2) `speed_drag_gain` identified as an
+artificial brake (plant has `rb.drag = 0`; ego parks 0.35 m/s under target) —
+Unity A/B on highway_65 + mixed_radius, base + hill overlay set to 0.0 on a
+pass. (3) A1 lead → 11.5 (below target − 0.2 planner bias). (4) ACC measured-
+dt behind `acc.use_measured_dt` (off). (5) PROMPT: gate on the new line;
+mechanism-before-grouping rule. (6) H3 header corrected. Open: T-ACC-EQ-BIAS
+(+3–5 m gap above EQ on every scenario).
 
 ### Session 2026-09-25 (evening) — nightly email as a report; sweeping_highway golden restored
 
