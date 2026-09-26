@@ -285,7 +285,7 @@ def run_closedloop(
     free_flow_target: float = 12.0,
     n_frames: int = 400,
     dt: float = FRAME_DT_MEASURED_S,
-    acc_dt: float = ACC_DT_PRODUCTION_S,
+    acc_dt: Optional[float] = None,        # None → 1/30 unless cfg acc.use_measured_dt (T-ACC-DT-HARDCODE)
     plant: Optional[PointMassPlant] = None,
     acc: Optional[ACCController] = None,
     longitudinal: Optional[LongitudinalController] = None,
@@ -312,6 +312,8 @@ def run_closedloop(
     acc_cfg = cfg.get("acc", {})
     lon_cfg = cfg.get("control", {}).get("longitudinal", {})
     safety_cfg = cfg.get("safety", {})
+    if acc_dt is None:
+        acc_dt = dt if bool(acc_cfg.get("use_measured_dt", False)) else ACC_DT_PRODUCTION_S
 
     sensor = ForwardRadarSensor(gap_alpha=float(acc_cfg.get("gap_alpha", 0.30)),
                                 rate_alpha=float(acc_cfg.get("rate_alpha", 0.20)),

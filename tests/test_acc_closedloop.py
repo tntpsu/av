@@ -292,6 +292,21 @@ class TestG2Mechanism:
                                     acc=_legacy_acc(hill_cfg), longitudinal=_legacy_lon(hill_cfg))
         assert r.frames_in(*ESTOP_STATES) > 0, r.summary()
 
+    def test_use_measured_dt_flag_is_honoured_by_harness(self, hill_cfg):
+        """acc.use_measured_dt (T-ACC-DT-HARDCODE kill-switch) → the harness steps ACC
+        at the frame period; default off → the legacy 1/30 s."""
+        import copy
+        on = copy.deepcopy(hill_cfg); on["acc"]["use_measured_dt"] = True
+        off = copy.deepcopy(hill_cfg); off["acc"]["use_measured_dt"] = False
+        r_on = run_g2_from_brake_onset(on)
+        r_off = run_g2_from_brake_onset(off)
+        # Both must still stop cleanly; the integration-rate change shows up as a
+        # different ACC target trajectory during the approach.
+        for r in (r_on, r_off):
+            assert not r.collided and r.frames_in(*ESTOP_STATES) == 0, r.summary()
+        ts_on, ts_off = r_on.col("acc_target_speed_mps")[:100], r_off.col("acc_target_speed_mps")[:100]
+        assert ts_on != ts_off
+
     def test_acc_dt_hardcode_slows_idm_integration_2p3x(self, hill_cfg):
         """ACC target speed integrates idm_accel × dt per frame.  With the
         production 1/30 s hardcode and real 76.9 ms frames the target moves at

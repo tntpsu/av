@@ -1103,6 +1103,7 @@ class AVStack:
             range_offset_m=float(acc_cfg.get('radar_range_offset_m', 0.0)),
         )
         self.acc_controller = ACCController(ACCParams.from_config(acc_cfg))
+        self._acc_cfg_use_measured_dt = bool(acc_cfg.get('use_measured_dt', False))
         self._acc_frame_state: dict = {}
         self._acc_radar_reading = None  # set each frame by _pf_run_acc_sensor
 
@@ -4936,6 +4937,9 @@ class AVStack:
         alpha = self._grade_ema_alpha
         self._smoothed_grade = alpha * raw_grade + (1.0 - alpha) * self._smoothed_grade
 
+        # T-ACC-DT-HARDCODE: expose the measured frame period to the ACC stage,
+        # which runs later in the frame without access to this dict.
+        self._last_control_dt = float(control_dt)
         return {
             'process_start': process_start,
             'unity_frame_count': unity_frame_count,
@@ -9867,8 +9871,17 @@ class AVStack:
         gov = dict(gov)
         ego_speed = float(vehicle_state_dict.get('speed', 0.0))
         free_flow_target = float(gov.get('governor_target_speed_mps', gov.get('adjusted_target_speed', ego_speed)))
-        # Use a fixed frame period (governor does not expose per-frame dt)
+        # T-ACC-DT-HARDCODE (2026-09-26): ACC integrates idm_accel × dt into its
+        # target speed. The legacy fixed 1/30 s against the measured ~77 ms frame
+        # ran every ACC time constant at 43 % of design. acc.use_measured_dt
+        # (kill-switch, default false) uses the frame period measured upstream
+        # (fv['control_dt'], stashed as self._last_control_dt), clamped to a sane
+        # band so a stalled frame cannot integrate a huge step.
         dt = 1.0 / 30.0
+        if bool(self._acc_cfg_use_measured_dt):
+            measured = float(getattr(self, '_last_control_dt', 0.0) or 0.0)
+            if 0.01 <= measured <= 0.25:
+                dt = measured
 
         output = self.acc_controller.compute_target_speed(
             ego_speed=ego_speed,
