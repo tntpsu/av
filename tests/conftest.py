@@ -50,7 +50,7 @@ BASELINE_SCORES: dict[str, float] = {
     "s_loop":           99.1,   # 2026-04-17 post q_lat=1.0 revert (was 96.7)
     "highway_65":       99.5,   # 2026-04-17 post q_lat=1.0 revert (was 96.2)
     "hairpin_15":       98.7,   # 2026-04-18 PP recovery term landed (was 91.6 Stanley, 79.0 live PP)
-    "sweeping_highway": 91.4,   # NOT re-baselined — no fresh run this cycle.
+    "sweeping_highway": 98.3,   # 2026-09-25 re-registered from recording_20260813_184354.h5 (March golden missing; 91.4 was stale)
     "mixed_radius":     98.7,   # 2026-04-17 post q_lat=1.0 revert (was 91.9)
     "hill_highway":     97.6,   # 2026-04-17 first registration (apex cutting residual keeps Trajectory at 91.5)
 }

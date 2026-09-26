@@ -1,87 +1,87 @@
 {
-    "schema_version": "1",
-    "milestone": "2026-04-18 — PP recovery term landed (replaces orchestrator post-limiter steering multiplier); hairpin_15 re-registered 79.0→98.7",
-    "recorded_at": "2026-04-18",
-    "notes": "Post-fix hairpin golden after PP recovery term (continuous smoothstep, upstream of rate/jerk limiter) replaced orchestrator post-limiter 1.2×/1.5× steering multiplier. hairpin_15: 79.0 live → 98.7 (Control 80→100, jerk max 30.08→18.0). Regression sweep (4 tracks) all within tolerance of frozen 2026-04-17 baselines — no other goldens updated. sweeping_highway NOT updated — no fresh run this cycle.",
-    "tracks": {
-        "s_loop":            "data/recordings/recording_20260417_173502.h5",
-        "highway_65":        "data/recordings/recording_20260417_173145.h5",
-        "hairpin_15":        "data/recordings/recording_20260418_185440.h5",
-        "sweeping_highway":  "data/recordings/recording_20260312_100209.h5",
-        "mixed_radius":      "data/recordings/recording_20260417_173342.h5",
-        "hill_highway":      "data/recordings/recording_20260417_181652.h5"
-    },
-    "documented_scores": {
-        "s_loop":            99.1,
-        "highway_65":        99.5,
-        "hairpin_15":        98.7,
-        "sweeping_highway":  93.6,
-        "mixed_radius":      98.7,
-        "hill_highway":      97.6
-    },
-    "documented_metrics": {
-        "s_loop": {
-            "lateral_rmse_m":          0.116,
-            "lateral_rmse_adj_m":      0.067,
-            "accel_p95_filtered_mps2": 0.691,
-            "commanded_jerk_p95_mps3": 0.624,
-            "out_of_lane_events":      0,
-            "emergency_stops":         0,
-            "duration_s":              116.8,
-            "notes": "Post q_lat=1.0 revert. Trajectory 96.7 green, all other layers 100. Slight curve_local_phase latching on straights (15.2%), not score-impacting."
-        },
-        "highway_65": {
-            "lateral_rmse_m":          0.040,
-            "lateral_rmse_adj_m":      0.038,
-            "accel_p95_filtered_mps2": 0.552,
-            "commanded_jerk_p95_mps3": 0.624,
-            "out_of_lane_events":      0,
-            "emergency_stops":         0,
-            "duration_s":              116.3,
-            "notes": "Post q_lat=1.0 revert. Trajectory 98.1 green. Regression 96.2→59.0→99.5 (Δ +3.3 vs previous baseline)."
-        },
-        "hairpin_15": {
-            "lateral_rmse_m":          0.173,
-            "lateral_rmse_adj_m":      0.097,
-            "accel_p95_filtered_mps2": 0.702,
-            "commanded_jerk_p95_mps3": 0.624,
-            "out_of_lane_events":      0,
-            "emergency_stops":         0,
-            "duration_s":              113.0,
-            "notes": "2026-04-18: PP recovery term landed (continuous smoothstep 1.0-2.0m, upstream of rate/jerk limiter). Replaces orchestrator post-limiter 1.2×/1.5× steering multiplier. Control layer 80→100 (jerk max 30.08→18.0 — now bound by pp_max_steering_jerk=18, previously bypassed by post-limiter multiplier). §27 recovery-term telemetry: active 18.4% frames, 100% at-car source, P95 term 0.053 rad, 0 saturation events. Trajectory 95.1 — residual apex cutting on C1 (late_turn_in, meanErr=-0.299m) predates this fix."
-        },
-        "sweeping_highway": {
-            "lateral_rmse_m":          0.254,
-            "lateral_rmse_adj_m":      0.247,
-            "accel_p95_filtered_mps2": 1.363,
-            "commanded_jerk_p95_mps3": 1.440,
-            "out_of_lane_events":      0,
-            "emergency_stops":         0,
-            "duration_s":              60.0,
-            "mpc_active_rate":         0.773,
-            "notes": "55% arc coverage (R300 corners). MPC active ~75-77%. NOT re-baselined 2026-04-17 — no fresh E2E run this cycle."
-        },
-        "mixed_radius": {
-            "lateral_rmse_m":          0.106,
-            "lateral_rmse_adj_m":      0.095,
-            "lateral_p95_m":           0.172,
-            "accel_p95_filtered_mps2": 0.633,
-            "commanded_jerk_p95_mps3": 0.624,
-            "out_of_lane_events":      0,
-            "emergency_stops":         0,
-            "duration_s":              115.0,
-            "notes": "Post q_lat=1.0 revert. Trajectory 95.2 green, all other layers 100. PP/MPC hybrid track (R40-R200)."
-        },
-        "hill_highway": {
-            "lateral_rmse_m":          0.192,
-            "lateral_rmse_adj_m":      0.171,
-            "lateral_p95_m":           0.299,
-            "accel_p95_filtered_mps2": 0.882,
-            "commanded_jerk_p95_mps3": 0.624,
-            "out_of_lane_events":      0,
-            "emergency_stops":         0,
-            "duration_s":              116.1,
-            "notes": "First registration. Post q_lat=1.0 revert recovered from 59.0→97.6. Trajectory 91.5 — residual apex cutting on R100 curves (C2/C3/C4), predates the q_lat regression, flagged for separate iteration. No e-stops or OOL."
-        }
-    }
+ "schema_version": "1",
+ "milestone": "2026-04-18 — PP recovery term landed (replaces orchestrator post-limiter steering multiplier); hairpin_15 re-registered 79.0→98.7",
+ "recorded_at": "2026-04-18",
+ "notes": "Post-fix hairpin golden after PP recovery term (continuous smoothstep, upstream of rate/jerk limiter) replaced orchestrator post-limiter 1.2×/1.5× steering multiplier. hairpin_15: 79.0 live → 98.7 (Control 80→100, jerk max 30.08→18.0). Regression sweep (4 tracks) all within tolerance of frozen 2026-04-17 baselines — no other goldens updated. sweeping_highway NOT updated — no fresh run this cycle. | 2026-09-25: sweeping_highway golden re-registered to recording_20260813_184354.h5 (1298 fr / 99.8 s, overall 98.3, Traj 94.0) — the March 2026 file (recording_20260312_100209.h5) was gone from disk, so all five sweeping_highway regression tests had been SKIPPING since, on the one track with a known real regression (T-SWEEP-HW-REGRESSION).",
+ "tracks": {
+  "s_loop": "data/recordings/recording_20260417_173502.h5",
+  "highway_65": "data/recordings/recording_20260417_173145.h5",
+  "hairpin_15": "data/recordings/recording_20260418_185440.h5",
+  "sweeping_highway": "data/recordings/recording_20260813_184354.h5",
+  "mixed_radius": "data/recordings/recording_20260417_173342.h5",
+  "hill_highway": "data/recordings/recording_20260417_181652.h5"
+ },
+ "documented_scores": {
+  "s_loop": 99.1,
+  "highway_65": 99.5,
+  "hairpin_15": 98.7,
+  "sweeping_highway": 93.6,
+  "mixed_radius": 98.7,
+  "hill_highway": 97.6
+ },
+ "documented_metrics": {
+  "s_loop": {
+   "lateral_rmse_m": 0.116,
+   "lateral_rmse_adj_m": 0.067,
+   "accel_p95_filtered_mps2": 0.691,
+   "commanded_jerk_p95_mps3": 0.624,
+   "out_of_lane_events": 0,
+   "emergency_stops": 0,
+   "duration_s": 116.8,
+   "notes": "Post q_lat=1.0 revert. Trajectory 96.7 green, all other layers 100. Slight curve_local_phase latching on straights (15.2%), not score-impacting."
+  },
+  "highway_65": {
+   "lateral_rmse_m": 0.04,
+   "lateral_rmse_adj_m": 0.038,
+   "accel_p95_filtered_mps2": 0.552,
+   "commanded_jerk_p95_mps3": 0.624,
+   "out_of_lane_events": 0,
+   "emergency_stops": 0,
+   "duration_s": 116.3,
+   "notes": "Post q_lat=1.0 revert. Trajectory 98.1 green. Regression 96.2→59.0→99.5 (Δ +3.3 vs previous baseline)."
+  },
+  "hairpin_15": {
+   "lateral_rmse_m": 0.173,
+   "lateral_rmse_adj_m": 0.097,
+   "accel_p95_filtered_mps2": 0.702,
+   "commanded_jerk_p95_mps3": 0.624,
+   "out_of_lane_events": 0,
+   "emergency_stops": 0,
+   "duration_s": 113.0,
+   "notes": "2026-04-18: PP recovery term landed (continuous smoothstep 1.0-2.0m, upstream of rate/jerk limiter). Replaces orchestrator post-limiter 1.2×/1.5× steering multiplier. Control layer 80→100 (jerk max 30.08→18.0 — now bound by pp_max_steering_jerk=18, previously bypassed by post-limiter multiplier). §27 recovery-term telemetry: active 18.4% frames, 100% at-car source, P95 term 0.053 rad, 0 saturation events. Trajectory 95.1 — residual apex cutting on C1 (late_turn_in, meanErr=-0.299m) predates this fix."
+  },
+  "sweeping_highway": {
+   "lateral_rmse_m": 0.254,
+   "lateral_rmse_adj_m": 0.247,
+   "accel_p95_filtered_mps2": 1.363,
+   "commanded_jerk_p95_mps3": 1.44,
+   "out_of_lane_events": 0,
+   "emergency_stops": 0,
+   "duration_s": 60.0,
+   "mpc_active_rate": 0.773,
+   "notes": "55% arc coverage (R300 corners). MPC active ~75-77%. NOT re-baselined 2026-04-17 — no fresh E2E run this cycle."
+  },
+  "mixed_radius": {
+   "lateral_rmse_m": 0.106,
+   "lateral_rmse_adj_m": 0.095,
+   "lateral_p95_m": 0.172,
+   "accel_p95_filtered_mps2": 0.633,
+   "commanded_jerk_p95_mps3": 0.624,
+   "out_of_lane_events": 0,
+   "emergency_stops": 0,
+   "duration_s": 115.0,
+   "notes": "Post q_lat=1.0 revert. Trajectory 95.2 green, all other layers 100. PP/MPC hybrid track (R40-R200)."
+  },
+  "hill_highway": {
+   "lateral_rmse_m": 0.192,
+   "lateral_rmse_adj_m": 0.171,
+   "lateral_p95_m": 0.299,
+   "accel_p95_filtered_mps2": 0.882,
+   "commanded_jerk_p95_mps3": 0.624,
+   "out_of_lane_events": 0,
+   "emergency_stops": 0,
+   "duration_s": 116.1,
+   "notes": "First registration. Post q_lat=1.0 revert recovered from 59.0→97.6. Trajectory 91.5 — residual apex cutting on R100 curves (C2/C3/C4), predates the q_lat regression, flagged for separate iteration. No e-stops or OOL."
+  }
+ }
 }
