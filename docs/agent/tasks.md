@@ -360,6 +360,15 @@ same cap) and `grep -n a_lat_tracking_budget_g config/av_stack_config.yaml av_st
 
 ### T-SWEEP-HW-REGRESSION — sweeping_highway 96.9 → 79.0 (2026-08-12)
 
+**2026-09-25 — regression coverage restored.** The March-2026 golden
+(`recording_20260312_100209.h5`) was missing from disk, so all five
+`sweeping_highway` scoring-regression tests had been SKIPPING silently — on the
+one track with a known real regression — and the nightly sweep compared against
+a stale 91.4 baseline (the "+6.9" every night). Golden re-registered to
+`recording_20260813_184354.h5` (overall 98.3, adj RMSE 0.120, accel P95 0.62);
+`scoring_baselines.json` + `BASELINE_SCORES` frozen to it. 30/30 scoring
+regression tests now run; the nightly "+6.9" artifact ends tonight.
+
 **New, real, and previously invisible.** Found the moment fresh recordings
 resumed — 91 nights of re-analyzing the frozen 2026-04-12 recording could not
 have detected it.

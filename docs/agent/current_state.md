@@ -3,6 +3,19 @@
 **Last updated:** 2026-09-25
 **Current milestone:** S2-M1 — **5 of 5 tracks still meeting all-layers-≥95 goal.** ACC emergency brake authority restored on G2 (885 → 2 e-stops, 99.8% reduction) via plan `acc-idm-accel-plumbing.md`. Frenet-frame MPC reference remains in shadow-mode.
 
+### Session 2026-09-25 (evening) — nightly email as a report; sweeping_highway golden restored
+
+Nightly emails were `tail -n 100` of the log. `tools/nightly/report_render.py`
++ `notify.py --job` now render each job's report as HTML: GATE badge, KPI
+chips, **Next steps first** (every `Action:`/`Fix:`/`Human decision needed:`/
+`Re-seed:` line), coloured results table, changes, one card per failure with
+root cause, raw report + log tail as appendix; plain-text alternative; any
+parse failure degrades to the raw report. Report-structure contracts added to
+both sweep PROMPTs. Preview sent. `sweeping_highway` golden re-registered
+(five tests had been skipping; baseline 91.4 → 98.3). Tonight is the first run
+on Sonnet 5 with the new email, the re-specced G1, the Util column and the
+corrected baseline.
+
 ### Session 2026-09-25 — G1/A1 re-specced to ego capability; speed-utilisation metric shipped (report-only)
 
 G1 lead 10 → 6 m/s and A1 lead 20 → 12 m/s with headers explaining the bound
