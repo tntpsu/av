@@ -174,6 +174,14 @@ class DataRecorder:
                     "local_curve_reference_shadow_promote_blend_floor_full"
                 ),
                 "mpc": dict(trajectory_cfg.get("mpc", {})),
+                "velocity_profiler": {
+                    k: v for k, v in (trajectory_cfg.get("velocity_profiler", {}) or {}).items()
+                    if isinstance(v, (bool, int, float, str, type(None)))
+                },
+                "speed_governor": {
+                    k: v for k, v in (trajectory_cfg.get("speed_governor", {}) or {}).items()
+                    if isinstance(v, (bool, int, float, str, type(None)))
+                },
             },
             "perception": {
                 "lane_width_min_m": cfg_public.get("perception", {}).get(
@@ -189,6 +197,18 @@ class DataRecorder:
                     k: v for k, v in (cfg_public.get("control", {}).get("lateral", {})).items()
                     if isinstance(v, (bool, int, float, str, type(None)))
                 },
+                # 2026-09-26: the snapshot carried lateral only, so the sweep
+                # playbook's "did the config reach runtime" probe was blind to
+                # every longitudinal / ACC key (speed_drag_gain, radar_range_offset_m,
+                # cutout_requires_no_lead …). Same scalar filter as lateral.
+                "longitudinal": {
+                    k: v for k, v in (cfg_public.get("control", {}).get("longitudinal", {})).items()
+                    if isinstance(v, (bool, int, float, str, type(None)))
+                },
+            },
+            "acc": {
+                k: v for k, v in (cfg_public.get("acc", {}) or {}).items()
+                if isinstance(v, (bool, int, float, str, type(None)))
             },
             "stack": {
                 k: (cfg_public.get("stack") or {}).get(k)

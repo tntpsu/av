@@ -49,9 +49,13 @@ After each run, verify recording > 500KB and > 200 frames before continuing.
 
 After the FIRST recording, verify config reached runtime:
 ```bash
-python3 -c "import h5py,json; f=h5py.File('<recording>','r'); lat=json.loads(f['meta/runtime_config_json'][0]).get('control',{}).get('lateral',{}); print('formula_enabled:', lat.get('pp_curve_local_floor_formula_enabled')); print('profile_enabled:', lat.get('pp_steering_profile_enabled'))"
+python3 -c "import h5py,json; f=h5py.File('<recording>','r'); c=json.loads(f['meta/runtime_config_json'][0]); lat=c.get('control',{}).get('lateral',{}); lon=c.get('control',{}).get('longitudinal',{}); acc=c.get('acc',{}); vp=c.get('trajectory',{}).get('velocity_profiler',{}); print('formula_enabled:', lat.get('pp_curve_local_floor_formula_enabled')); print('profile_enabled:', lat.get('pp_steering_profile_enabled')); print('speed_drag_gain:', lon.get('speed_drag_gain'), '| radar_range_offset_m:', acc.get('radar_range_offset_m'), '| cutout_requires_no_lead:', acc.get('cutout_requires_no_lead'), '| a_lat_tracking_budget_g:', vp.get('a_lat_tracking_budget_g'))"
 ```
-If either shows `None` or `False` when expected `True` → config wiring issue. Stop and fix before continuing.
+If either lateral flag shows `None` or `False` when expected `True` → config wiring issue. Stop and fix before continuing.
+The longitudinal / ACC / profiler keys are in the snapshot since 2026-09-26 (recordings before
+that show `None` for them — that is a snapshot gap, not a wiring failure). Expected today:
+`speed_drag_gain: 0.0`, `radar_range_offset_m: 4.43`, `cutout_requires_no_lead: True`,
+`a_lat_tracking_budget_g: 0.05`.
 
 After each run, analyze:
 ```bash

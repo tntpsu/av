@@ -3,6 +3,21 @@
 **Last updated:** 2026-09-26
 **Current milestone:** S2-M1 — **5 of 5 tracks still meeting all-layers-≥95 goal.** ACC emergency brake authority restored on G2 (885 → 2 e-stops, 99.8% reduction) via plan `acc-idm-accel-plumbing.md`. Frenet-frame MPC reference remains in shadow-mode.
 
+### Session 2026-09-26 (afternoon) — first fresh lateral sweep in 42 days: no regressions
+
+Six fresh 60 s runs (17:00–17:07, drag term already removed): every track
+within ±0.2 of baseline, 0 e-stops, all non-Trajectory layers 100. Gate FAIL
+on the standing three (hairpin 94.6, sweeping_highway 92.9, hill_highway 91.4);
+mixed_radius exactly 95.0. **T-SWEEP-HW-REGRESSION did not reproduce**
+(sweeping_highway 98.1; the Aug-12 79.0 remains a one-day event). Speeds
++2–5 % vs the Aug-13 recordings on five tracks with lateral RMSE flat
+(mixed_radius 0.123 → 0.115). Util vs allowed: s_loop 0.51, hill 0.57,
+mixed 0.79, hairpin 0.79, highway 0.94, sweeping 0.94 — curve_cap binding
+everywhere. Tonight's 03:00 sweep will re-analyze these files (latest per
+track), so the "FROZEN" banner should clear. Goldens (Apr-17/18) predate every
+2026 fix — re-freezing to today's six recordings is a decision to make.
+Tracking-budget A/B (0.05 vs 0.08) launched 17:10 on hill_highway.
+
 ### Session 2026-09-26 — night 45 review: G1 detection fixed; gap gate rebuilt; drag term A/B'd
 
 Night 45 (first on Sonnet 5; new email format rendered): G1 detection 12.6 % →

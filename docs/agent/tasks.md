@@ -436,6 +436,11 @@ same cap) and `grep -n a_lat_tracking_budget_g config/av_stack_config.yaml av_st
 
 ### T-SWEEP-HW-REGRESSION — sweeping_highway 96.9 → 79.0 (2026-08-12)
 
+**2026-09-26 fresh daytime sweep: non-reproducing again.** sweeping_highway 98.1
+(Traj 92.9) on a fresh 60 s run with today's code. Three fresh runs since Aug-13
+(98.3, 98.3, 98.1) against two on Aug-12 (79.0, 79.0). Treat the Aug-12 pair as a
+one-day event (cadence hypothesis stands); close unless it recurs on a fresh run.
+
 **2026-09-25 — regression coverage restored.** The March-2026 golden
 (`recording_20260312_100209.h5`) was missing from disk, so all five
 `sweeping_highway` scoring-regression tests had been SKIPPING silently — on the

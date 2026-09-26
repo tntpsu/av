@@ -28,6 +28,16 @@ def test_runtime_config_snapshot_written_once(tmp_path: Path) -> None:
         assert "resolved_mpc_params" in snap
         assert snap["resolved_mpc_params"]["elat_ramp_rate_m_per_frame"] >= 0.0
         assert snap["config_overlay_path"] is not None
+        # 2026-09-26: longitudinal / ACC / profiler / governor scalars are in the
+        # snapshot so the sweep playbook's runtime probe can see them.
+        lon = snap["control"]["longitudinal"]
+        assert "speed_drag_gain" in lon and "max_accel" in lon
+        assert "radar_range_offset_m" in snap["acc"] and "cutout_requires_no_lead" in snap["acc"]
+        assert "a_lat_tracking_budget_g" in snap["trajectory"]["velocity_profiler"]
+        assert "curve_cap_peak_lat_accel_g" in snap["trajectory"]["speed_governor"]
+        # scalar filter: no lists/dicts leak into these sections
+        for sec in (lon, snap["acc"], snap["trajectory"]["velocity_profiler"], snap["trajectory"]["speed_governor"]):
+            assert all(isinstance(v, (bool, int, float, str, type(None))) for v in sec.values())
 
 
 def test_diag_silent_and_ramp_datasets_flush(tmp_path: Path) -> None:
