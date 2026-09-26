@@ -152,6 +152,31 @@ def test_standstill_inside_s0_is_not_a_near_miss():
     assert _compute_acc_score(inp)["safety"] == 100.0
 
 
+def test_post_convergence_rmse_is_measured_against_equilibrium_not_target():
+    """H7 shape: IDM equilibrium is 1.8x s*. A car sitting exactly at equilibrium has
+    ~0 post-convergence RMSE vs EQ and a large RMSE vs s* — the old gate's failure."""
+    from acc_pipeline_analysis import compute_post_convergence_gap
+    n = 600
+    tg = np.full(n, 15.0); eq = np.full(n, 27.0)
+    gap = np.full(n, 60.0); gap[100:] = 27.0            # startup catch-up, then parked at EQ
+    d = {"acc_active": np.ones(n), "acc_gap_error": gap - tg, "acc_target_gap": tg, "acc_equilibrium_gap": eq, "fps": 13.0}
+    pc = compute_post_convergence_gap(d)
+    assert pc["converged"] and pc["gate_pass"]
+    assert pc["rmse_vs_eq_m"] == pytest.approx(0.0, abs=1e-6)
+    assert pc["rmse_vs_target_m"] == pytest.approx(12.0, abs=1e-6)
+    assert pc["converged_at_s"] == pytest.approx(100 / 13.0, abs=0.1)
+
+
+def test_post_convergence_never_converged_is_reported():
+    from acc_pipeline_analysis import compute_post_convergence_gap
+    n = 600
+    d = {"acc_active": np.ones(n), "acc_gap_error": np.full(n, 100.0), "acc_target_gap": np.full(n, 15.0),
+         "acc_equilibrium_gap": np.full(n, 27.0), "fps": 13.0}
+    pc = compute_post_convergence_gap(d)
+    assert pc["converged"] is False
+    assert compute_post_convergence_gap({"acc_active": np.ones(n), "acc_gap_error": None, "acc_target_gap": None, "acc_equilibrium_gap": None}) is None
+
+
 def test_ttc_violation_deducts_safety_only():
     """TTC violation should hit Safety, leave Tracking/Behavior at 100."""
     ttc = np.full(600, 5.0)

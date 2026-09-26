@@ -113,6 +113,14 @@ ACC_TTC_WARNING_PENALTY_PER_PCT: float = 0.3  # pts — per % of ACC frames in w
 
 # ── ACC — Comfort and quality (Tier 3) ───────────────────────────────────────
 ACC_GAP_RMSE_GATE_M: float = 35.0           # m  — full-run gap RMSE gate (includes startup phase).
+ACC_GAP_RMSE_POST_CONV_GATE_M: float = 10.0  # m  — post-convergence gap RMSE vs the IDM EQUILIBRIUM gap
+                                              #      (acc_idm_equilibrium_gap_m), not vs s*. IDM settles at
+                                              #      s*/sqrt(1-(v/v0)^4), which is 1.3-1.8x s* when the lead is
+                                              #      near the free-flow target, so "RMSE <= 0.5 m vs s*" was
+                                              #      unreachable by construction (pool: 17-24 m post-convergence).
+                                              #      Healthy pool vs EQ on 2026-09-26: 4.3-7.5 m; tighten toward
+                                              #      5 m once T-ACC-EQ-BIAS (+3-5 m standing offset) is fixed.
+ACC_POST_CONV_TOL_FRAC: float = 0.20          # —  — convergence = first ACC frame with |gap-EQ| < max(2 m, 20% EQ)
                                             #      IDM equilibrium gap = target_gap / sqrt(1-(v/v0)^4).
                                             #      At v_lead=12, v0=15: eq_gap≈26m vs target≈20m → steady-state
                                             #      gap_error≈6–8m. With ego-from-rest startup, full-run RMSE≈30m.

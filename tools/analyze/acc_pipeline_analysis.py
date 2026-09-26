@@ -31,6 +31,8 @@ from scoring_registry import (
     ACC_NEAR_MISS_GAP_M,
     ACC_RADAR_RANGE_OFFSET_M,
     ACC_GAP_RMSE_GATE_M,
+    ACC_GAP_RMSE_POST_CONV_GATE_M,
+    ACC_POST_CONV_TOL_FRAC,
     ACC_DETECTION_RATE_GATE,
     ACC_JERK_P95_GATE_MPS3,
     ACC_MIN_ACTIVE_FRAME_RATE,
@@ -143,6 +145,7 @@ def _load_acc_arrays(path: Path) -> dict | None:
             "acc_ttc_s": arr("vehicle/acc_ttc_s"),
             "acc_gap_error": arr("vehicle/acc_gap_error_m"),
             "acc_target_gap": arr("vehicle/acc_target_gap_m"),
+            "acc_equilibrium_gap": arr("vehicle/acc_idm_equilibrium_gap_m"),
             "speed": arr("vehicle/speed"),
             "long_jerk_capped":   ctrl("control/longitudinal_jerk_capped"),
             "long_accel_smoothed": ctrl("control/longitudinal_accel_cmd_smoothed"),
@@ -202,6 +205,53 @@ def _card1_radar_health(d: dict) -> None:
                   f"max={float(np.max(dist_valid)):.1f}m")
 
 
+def _post_convergence_mask(acc_mask: np.ndarray, gap: np.ndarray, eq: np.ndarray) -> np.ndarray:
+    """ACC-active frames from the first one where the gap is within
+    max(2 m, ACC_POST_CONV_TOL_FRAC × EQ) of the IDM equilibrium gap, onward.
+    Startup catch-up (H7: ego from rest, lead 10 m/s, gap > 40 m for ~60 s) is
+    excluded by construction; a run that never converges yields an empty mask."""
+    idx = np.flatnonzero(acc_mask & np.isfinite(gap) & np.isfinite(eq) & (eq > 0.0))
+    if idx.size == 0:
+        return np.zeros_like(acc_mask, dtype=bool)
+    close = np.abs(gap[idx] - eq[idx]) < np.maximum(2.0, ACC_POST_CONV_TOL_FRAC * eq[idx])
+    if not close.any():
+        return np.zeros_like(acc_mask, dtype=bool)
+    out = np.zeros_like(acc_mask, dtype=bool)
+    out[idx[int(np.argmax(close))]:] = True
+    return out & acc_mask & np.isfinite(gap) & np.isfinite(eq)
+
+
+def compute_post_convergence_gap(d: dict) -> dict | None:
+    """Post-convergence gap tracking vs the IDM equilibrium (T-ACC-RMSE-GATE).
+
+    Returns None when the recording lacks the equilibrium field or ACC never
+    converged. `bias_m` is the median (gap − EQ): the standing +3–5 m offset
+    seen across the pool on 2026-09-26 is T-ACC-EQ-BIAS.
+    """
+    eq = d.get("acc_equilibrium_gap")
+    ge, tg = d.get("acc_gap_error"), d.get("acc_target_gap")
+    if eq is None or ge is None or tg is None:
+        return None
+    acc_mask = d["acc_active"] > 0.5
+    gap = ge + tg
+    post = _post_convergence_mask(acc_mask, gap, eq)
+    if post.sum() < 30:
+        return {"converged": False, "n_post": int(post.sum())}
+    e = gap[post] - eq[post]
+    first = int(np.flatnonzero(post)[0])
+    fps = d.get("fps") or 13.0
+    return {
+        "converged": True,
+        "n_post": int(post.sum()),
+        "converged_at_s": first / float(fps),
+        "rmse_vs_eq_m": float(np.sqrt(np.mean(e ** 2))),
+        "bias_m": float(np.median(e)),
+        "rmse_vs_target_m": float(np.sqrt(np.mean((gap[post] - tg[post]) ** 2))),
+        "eq_over_target": float(np.median(eq[post] / np.maximum(tg[post], 0.1))),
+        "gate_pass": bool(np.sqrt(np.mean(e ** 2)) <= ACC_GAP_RMSE_POST_CONV_GATE_M),
+    }
+
+
 def _card2_idm_state(d: dict) -> None:
     print("\n" + "=" * 72)
     print("  CARD 2 — IDM STATE QUALITY")
@@ -217,8 +267,18 @@ def _card2_idm_state(d: dict) -> None:
         if ge_acc.size > 0:
             rmse = float(np.sqrt(np.mean(ge_acc ** 2)))
             gate = "PASS" if rmse <= ACC_GAP_RMSE_GATE_M else "FAIL"
-            print(f"  Gap Error RMSE:   {rmse:.3f}m  [{gate} ≤ {ACC_GAP_RMSE_GATE_M}m]")
+            print(f"  Gap Error RMSE:   {rmse:.3f}m  [{gate} ≤ {ACC_GAP_RMSE_GATE_M}m]  (full run, vs s* — startup included)")
             print(f"  Gap Error P05/P95: {np.percentile(ge_acc, 5):.2f}m / {np.percentile(ge_acc, 95):.2f}m")
+            pc = compute_post_convergence_gap(d)
+            if pc is None:
+                print("  Post-conv RMSE vs EQ: n/a (no acc_idm_equilibrium_gap_m in recording)")
+            elif not pc["converged"]:
+                print(f"  Post-conv RMSE vs EQ: n/a — ACC never converged to the IDM equilibrium ({pc['n_post']} frames)")
+            else:
+                g2 = "PASS" if pc["gate_pass"] else "FAIL"
+                print(f"  Post-conv RMSE vs EQ: {pc['rmse_vs_eq_m']:.2f}m  [{g2} ≤ {ACC_GAP_RMSE_POST_CONV_GATE_M}m]  "
+                      f"converged at {pc['converged_at_s']:.0f}s; bias (gap−EQ) {pc['bias_m']:+.1f}m; "
+                      f"EQ/s* {pc['eq_over_target']:.2f}; vs s* would be {pc['rmse_vs_target_m']:.1f}m")
             # Same fps bug as _sign_flips_per_min had: 30.0 was hardcoded while
             # the stack captures at ~13 FPS. Also `max(1.0, ...)` floored the
             # duration at one minute, silently under-reporting any run shorter
@@ -588,6 +648,7 @@ def _compute_acc_score(d: dict) -> dict | None:
         "n_active_frames": n_active,
         "n_collision": n_collision,
         "n_contact_frames": n_contact_frames,
+        "post_convergence_gap": compute_post_convergence_gap(d),   # informational; not in the composite yet
         "n_estop": n_estop,
         "ttc_min": ttc_min_val,
         "deductions": {
