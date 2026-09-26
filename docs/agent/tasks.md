@@ -300,7 +300,14 @@ torque nonlinearity, actuator lag). Next probe: align `unity_feedback/
 actual_throttle_applied` by timestamp (it is on a −37 s clock, see
 reference_hdf5_acc_schema_gaps) and compare commanded vs delivered accel during
 steady following; then fit a first-order actuator into the harness plant and
-see if the bias appears.
+see if the bias appears. **2026-09-26 A/B evidence:** integrating IDM at the
+design rate (T-ACC-DT-HARDCODE flag) makes the bias LARGER (+4.2 → +6.1 m on
+H5). A bias that grows with integration speed is a target-leads-ego lag: IDM
+must hold a > 0 (gap > EQ) to keep `acc_target_speed` above the ego by the
+amount the longitudinal loop droops. Measure `acc_target_speed_mps − speed`
+during steady following first — if it is a standing +0.2–0.5 m/s, the fix is
+in the longitudinal loop (integral term or feed-forward on the ACC target),
+not in ACC.
 
 ### T-ACC-DT-HARDCODE — ACC stepped with dt=1/30 while frames arrive at 1/13 (2026-09-22)
 
@@ -316,9 +323,17 @@ class as `ceeba44` (sign-flip rate inflated by hardcoded 30 FPS). Pass
 **Wired 2026-09-26 behind `acc.use_measured_dt` (code default false):** the
 frame stage stashes `self._last_control_dt`; the ACC stage uses it when the flag
 is on (clamped to 10–250 ms so a stalled frame cannot integrate a giant step).
-Harness honours the flag (`acc_dt=None` → cfg). Enabling it changes every ACC
-time constant ×2.3 toward design → A/B on H5 (stop-go) and G2 before flipping
-the base config; candidate fix for T-ACC-EQ-BIAS.
+Harness honours the flag (`acc_dt=None` → cfg).
+
+**Unity A/B 2026-09-26, H5 stop-go, 5 pairs × 90 s (flag false vs true):**
+TTC_min 2.58 → 2.71 (min 2.56 → 2.63), gap p10 7.9 → 9.5 m, contact 0/5 both,
+e-stops 0, EB entries 0, composite 99.9 → 99.4. **But post-convergence RMSE vs
+EQ 5.5 → 7.3 and the equilibrium bias +4.2 → +6.1 m.** Faster integration is
+safe and follows *further* from equilibrium. Decision: leave the flag OFF —
+it fixes a real bug on paper but the design-rate loop is worse at holding
+IDM's own gap, which means the bias is a lag between the ACC target and the
+ego that the slower integration partly hides (see T-ACC-EQ-BIAS). Re-enable
+together with the fix for that lag, not before.
 
 ### T-ACC-EB-STANDSTILL — EMERGENCY_BRAKE never releases at standstill (2026-09-22; FIXED + Unity A/B VERIFIED 2026-09-23)
 
@@ -430,6 +445,28 @@ Decide one of:
     four curved tracks. A/B ≥ 5 on hill_highway + s_loop + mixed_radius.
 (c) **Regime work** (LMPC/NMPC on curves, `project_mpc_primary`) which raises
     the trackable lateral acceleration and lifts this cap for real. Stage 2.
+**A/B 2026-09-26, hill_highway, 5 pairs × 60 s, disjoint quartiles on every column:**
+
+| | 0.05 | 0.08 |
+|---|---|---|
+| mean speed / util vs allowed | 7.66 m/s / 0.57 | 8.84 m/s / 0.73 (+15 %) |
+| lateral RMSE | 0.215 m | 0.263 m (+0.048, outside ±0.03) |
+| Trajectory / Overall | 90.7 / 97.4 | 88.3 / 96.5 |
+| e-stops / OOL | 0 / 0 | 0 / 0 |
+
+15 % more speed costs 2.4 Trajectory points on a track already 4 below the
+gate. **s_loop leg (5 pairs):** 4.38 → 5.29 m/s (+20 %), util 0.50 → 0.61,
+lateral RMSE 0.127 → 0.147, |e| p95 0.183 → 0.246, Trajectory 96.3 → 95.6
+(n=3 analyzer; n=5 pending) — stays above the gate; 0 e-stops / 0 OOL.
+
+So the slope is track-dependent: R40 (s_loop) pays ~0.04 Trajectory per 1 %
+speed, R100 (hill) ~0.16 per 1 %. Safe everywhere (no e-stops, no OOL). The
+budget is not a free knob — it is PP's tracking ceiling drawn as a line, i.e.
+option (c) pricing itself — but 0.08 is defensible on s_loop-class curves and
+costly on hill-class ones. Decision stays with the human; config unchanged
+(0.05). A per-curvature budget would be a proxy stack (feedback_tuning_vs_
+architecture); the honest fix is the LMPC regime on curves.
+
 Recommend (a) now, (c) as the architecture item it already is. Start:
 `analyze_drive_overall.py data/recordings/recording_20260815_112837.h5` (lead-free,
 same cap) and `grep -n a_lat_tracking_budget_g config/av_stack_config.yaml av_stack/orchestrator.py`.

@@ -426,5 +426,41 @@
     ],
     "superseded_by": null,
     "resolved_by": null
+  },
+  {
+    "date": "2026-09-26",
+    "target_metric": "speed utilisation vs Trajectory layer (Pareto)",
+    "target_track": "hill_highway + s_loop",
+    "approach": "trajectory.velocity_profiler.a_lat_tracking_budget_g 0.05 -> 0.08, run_ab_batch 5 pairs x 60 s; arms scored with speed_utilization + analyze_drive_overall.",
+    "fix_level": "TUNING",
+    "hypothesis": "The 0.05 g budget holds the ego to sqrt(0.05*g*R) on every curve (7.0 m/s on R100); raising it should trade speed for PP tracking error. Measure the slope before deciding.",
+    "outcome": "NO_IMPROVEMENT",
+    "outcome_status": "OPEN",
+    "metric_before": 90.7,
+    "metric_after": 88.3,
+    "root_cause_of_failure": "ceiling_reached",
+    "root_cause_detail": "Speed 7.66 -> 8.84 m/s (+15%), util 0.57 -> 0.73, lateral RMSE 0.215 -> 0.263 (+0.048), Trajectory 90.7 -> 88.3, Overall 97.4 -> 96.5, 0 e-stops / 0 OOL both arms, disjoint quartiles. The budget is PP tracking capability expressed as speed; raising it buys speed at ~0.16 Trajectory pts per 1% speed on R100. Not applied. Decision (raise vs LMPC regime work) is the human's; A/B quantifies it. s_loop leg (5 pairs): 4.38 -> 5.29 m/s (+20%), util 0.50 -> 0.61, RMSE 0.127 -> 0.147, |e|p95 0.183 -> 0.246, Trajectory 96.3 -> 95.6 (n=3 analyzer; stays >= 95), 0 e-stops / 0 OOL. Slope is track-dependent: ~0.04 Traj pts per 1% speed on R40 vs ~0.16 on R100.",
+    "iterations_spent": 1,
+    "files_changed": [],
+    "superseded_by": null,
+    "resolved_by": null
+  },
+  {
+    "date": "2026-09-26",
+    "target_metric": "ACC post-convergence gap RMSE vs equilibrium / bias (TTC as safety guard)",
+    "target_track": "highway_h5_stop_go",
+    "approach": "acc.use_measured_dt false -> true (ACC integrates idm_accel at the measured ~77 ms frame period instead of the hardcoded 1/30 s). run_ab_batch 5 pairs x 90 s.",
+    "fix_level": "CODE_PATCH",
+    "hypothesis": "The 1/30 s hardcode runs ACC time constants at 43% of design; integrating at the real dt should tighten following and might remove the +3-5 m equilibrium bias.",
+    "outcome": "NO_IMPROVEMENT",
+    "outcome_status": "OPEN",
+    "metric_before": 5.53,
+    "metric_after": 7.32,
+    "root_cause_of_failure": "transient_dominance",
+    "root_cause_detail": "Safety neutral-to-better: TTC_min 2.58 -> 2.71, gap p10 7.9 -> 9.5, contact 0/5 both arms, 0 e-stops, 0 EB entries. Tracking worse: post-conv RMSE vs EQ 5.5 -> 7.3, bias +4.2 -> +6.1 m, composite 99.9 -> 99.4. A bias that grows with integration rate indicates a target-leads-ego lag in the longitudinal loop (IDM holds a>0, i.e. gap>EQ, to keep the target above a drooping ego); the slow integration was partly masking it. Flag left OFF; re-enable with the lag fix.",
+    "iterations_spent": 1,
+    "files_changed": [],
+    "superseded_by": null,
+    "resolved_by": null
   }
 ]
