@@ -3,6 +3,22 @@
 **Last updated:** 2026-09-26
 **Current milestone:** S2-M1 — **5 of 5 tracks still meeting all-layers-≥95 goal.** ACC emergency brake authority restored on G2 (885 → 2 e-stops, 99.8% reduction) via plan `acc-idm-accel-plumbing.md`. Frenet-frame MPC reference remains in shadow-mode.
 
+### Session 2026-09-26 (evening) — EQ-bias hunt: four A/Bs, mechanism narrowed to a delivery ceiling
+
+Measured on every following scenario: ACC target +1.0–1.6 m/s above the ego,
+IDM holding +0.4–1.1 m/s², controller delivering +0.02–0.14. Four Unity A/Bs
+on G1/H5 (26 runs): measured-dt (bias worse), both-sign IDM routing (reaches
+the controller, still not delivered), measured-jerk cap 0.7 → 6.0 (fires on
+40–54 % of frames because a 13 FPS second difference of speed is noise, p50
+2.15 m/s³; relaxing it frees the path but the gap oscillates), and the
+combination (RMSE 13 → 46, chatter). Delivered accel is ~+0.12 regardless —
+a ceiling downstream of everything touched. All changes reverted; two
+kill-switches left in code, off. Next probe is the commanded → applied →
+achieved accel chain on one steady run (`unity_feedback` aligned by
+timestamp) and dt jitter in the harness. Harness lesson reinforced: it
+predicted the routing fix because its plant has neither timing jitter nor the
+delivery ceiling.
+
 ### Session 2026-09-26 (afternoon) — first fresh lateral sweep in 42 days: no regressions
 
 Six fresh 60 s runs (17:00–17:07, drag term already removed): every track

@@ -309,6 +309,93 @@ during steady following first — if it is a standing +0.2–0.5 m/s, the fix is
 in the longitudinal loop (integral term or feed-forward on the ACC target),
 not in ACC.
 
+**Measured 2026-09-26 (steady following, t > 60 s):** target − ego **+1.0 to
++1.6 m/s** on H5 legacy dt, **+3.0** with measured dt, +1.0 on G1, +0.9 on H3;
+IDM standing **+0.7 to +1.1 m/s²**; `accel_cmd_raw` delivered **+0.05 to
++0.07**; throttle 0.06–0.16; ego at lead speed. Root cause: the IDM→controller
+routing forwards IDM only on deceleration ("accel path still planner-owned"),
+and the ACC overlays disable the accel PID, so the accel side is a P-only speed
+loop (gain 0.12) that needs a standing droop to hold speed against the plant's
+rolling resistance. IDM can only supply that target lead by parking the gap
+above its own equilibrium. Harness with a resistive plant (0.1 m/s² per m/s,
+matching Unity's throttle-to-hold) reproduces it: bias +3.1 m, target lead
++1.9 m/s; **routing both signs → +0.0 m**, H5/G2 safety unchanged.
+
+**Fix applied (uncommitted):** `control.longitudinal.acc_idm_accel_routing_positive:
+true` (orchestrator, kill-switch, code default false).
+
+**Unity A/B #1 on H5 (5 pairs, 18:00–18:18): no improvement** — bias +4.3 →
++3.9, target lead +1.49 → +1.31, IDM +0.8 standing in both arms, safety
+unchanged, Behavior 96.7 → 94.7. The routing DID reach the controller
+(`reference_accel_source = acc_idm`, `reference_accel_mps2 = +1.10`) and the
+controller still delivered +0.14: `longitudinal_jerk_capped` on **61 %** of
+frames, `accel_capped` 16 %. H5's lead is a 0↔8 m/s sinusoid with peak
+acceleration 2.5 m/s² against `max_accel` 1.2, so on every acceleration phase
+the measured-jerk/accel limiters scale the throttle down whatever IDM asks —
+H5's "bias" is largely the lead outrunning a capped ego, which is a scenario
+property (the header only checked the *decel* side, 2.5 m/s²), not the droop.
+Wrong scenario for a steady-state question; A/B #2 launched 18:20 on G1
+(constant 5.5 m/s lead, +7.4 m bias). Expect bias → ~0 there if the mechanism
+is right; if not, the droop is downstream of `reference_accel` too and the next
+suspect is the jerk limiter's re-arm on small measured jerks.
+
+**A/B #2 on G1 (5 pairs × 120 s, 18:20–18:42): NOT confirmed.** Bias +3.7 →
++2.6 but post-conv RMSE 8.1 → 11.0, composite 98.1 → 95.8, `jerk_capped`
+41 % → 54 %; TTC 9.0 → 9.5, 0 contact / e-stop both arms. In both arms IDM
+held +0.36–0.38 and `accel_cmd_raw` was **+0.01–0.04** — the routed
+`reference_accel` reached the controller and was destroyed downstream. **The
+suspect is now the measured-jerk throttle cap** (`pid_controller.py` ~5300:
+`throttle *= max_jerk / measured_jerk` with `max_jerk 0.7 m/s³`), which acts on
+a second difference of speed at 13 FPS and fires on 40–60 % of frames — a
+comfort proxy on a noise-dominated derivative, double-limiting a command that
+the command-side jerk limiter (1–4 m/s³) already shapes. The harness never
+showed it because its speed signal is noiseless. `acc_idm_accel_routing_positive`
+reverted to false for tonight (code kept as kill-switch). Next: quantify the
+measured-jerk noise (below), then A/B relaxing/gating the measured-jerk cap in
+ACC states on G1 with the comfort gates (real jerk P95 ≤ 6) as the guard.
+
+**Measured-jerk noise (G1 steady following, controller's own α=0.8 filter):**
+|measured jerk| p50 **2.15 m/s³**, p95 8.1, vs cap 0.7 → 82 % of frames over
+the cap (fires on the ~half where sign matches: 40–54 % recorded); measured
+accel p95 1.67 vs cap 1.2. At 13 FPS with dt p95 = 2× median (dropped frames),
+a second difference of speed is noise, not jerk. The harness with white speed
+noise reaches only 11–13 % capped — the Unity trigger is timing jitter, which
+the constant-dt harness cannot show.
+
+**A/B #3 on G1 (`max_jerk` 0.7 vs 6.0, routing off, 5 pairs):** jerk-capped
+42 → 12 %, delivered `a_raw` +0.02 → +0.10, comfort inside gates (accel P95
+0.73 ≤ 3.0, jerk P95 3.08 ≤ 6.0) — but bias +3.8 → +3.6 and post-conv RMSE
+7.1 → **14.3** (more oscillation), composite 98.3 → 96.5. With decel-only
+routing the accel side is still the P-loop, so what gets through is 0.12 ×
+droop, not IDM's +0.39. Neither half works alone; **A/B #4 (cap 6.0 in both
+arms, routing off vs on) launched 19:12.** If bias → ~0 with RMSE ≤ baseline
+and comfort inside gates → apply both; otherwise revert `max_jerk` to 0.7 and
+the next move is a proper measured-jerk estimator (timestamp-aware, longer
+window) rather than a threshold.
+
+**A/B #4 (cap 6.0 both arms, routing off vs on, 5 pairs, 19:12–19:31): FAILS
+the rule.** Bias +3.7 → +2.6, but post-conv RMSE 13.3 → **45.7**, Behavior
+92.8 → 79.6, composite 96.8 → 94.7; TTC/contact fine. Delivered `a_raw` is
+**+0.12 in both arms** — with the cap relaxed and IDM's +0.39 routed in, the
+chain still emits ~0.10 throttle. Reverted `max_jerk` to 0.7; both kill-switches
+(`acc_idm_accel_routing_positive`, `acc.use_measured_dt`) stay off.
+
+**Where the bias hunt stands after four A/Bs (26 Unity runs):** every hypothesis
+that lives in ACC or the controller's known limiters is refuted or insufficient:
+dt hardcode (worse), radar noise (harness ≤ 0.2 m), EMA (in harness), P-loop
+droop (real but ~1 m), jerk cap (real, 40–54 %, but freeing it does not deliver
+IDM's command). What is left is a **~0.12 m/s² delivery ceiling** in steady
+following: `accel_cmd_raw` ≈ +0.12 regardless of reference_accel — candidates
+are the measured-ACCEL cap (`max_accel` 1.2 vs measured p95 1.67 from the same
+noisy derivative; `accel_capped` 10–16 %), the throttle curve (`gamma` 1.4)
+squashing small commands, `straight_throttle_cap`, or a Unity-side
+throttle→torque deadband. **Next probe is data, not a knob:** align
+`unity_feedback/actual_throttle_applied` by timestamp (−37 s clock) and plot
+commanded accel → throttle → applied throttle → achieved accel for one steady
+G1 run; the stage where +0.39 becomes +0.12 is the fix site. Add dt jitter to
+the harness plant (dt p95 = 2× median) so it can reproduce the derivative
+noise it currently cannot.
+
 ### T-ACC-DT-HARDCODE — ACC stepped with dt=1/30 while frames arrive at 1/13 (2026-09-22)
 
 `av_stack/orchestrator.py:9864` — `dt = 1.0 / 30.0  # governor does not expose

@@ -462,5 +462,68 @@
     "files_changed": [],
     "superseded_by": null,
     "resolved_by": null
+  },
+  {
+    "date": "2026-09-26",
+    "target_metric": "ACC post-convergence gap bias vs IDM equilibrium",
+    "target_track": "highway_h5_stop_go + hill_g1_grade_following",
+    "approach": "control.longitudinal.acc_idm_accel_routing_positive false -> true (forward IDM acceleration to the longitudinal controller in both signs, not decel-only). run_ab_batch 5 pairs on H5 (90 s) and G1 (120 s).",
+    "fix_level": "CODE_PATCH",
+    "hypothesis": "Harness with a resistive plant reproduced the +3-5 m bias as a P-loop droop (IDM target +1.9 m/s above ego) and both-sign routing removed it (+3.1 -> 0.0 m).",
+    "outcome": "NO_IMPROVEMENT",
+    "outcome_status": "OPEN",
+    "metric_before": 3.7,
+    "metric_after": 2.6,
+    "root_cause_of_failure": "proxy_approximation",
+    "root_cause_detail": "H5: bias +4.3 -> +3.9, jerk_capped 61% (lead peak accel 2.5 > max_accel 1.2; wrong scenario). G1: bias +3.7 -> +2.6, post-conv RMSE 8.1 -> 11.0, composite 98.1 -> 95.8, jerk_capped 41 -> 54%, IDM +0.36-0.38 both arms, accel_cmd_raw +0.01-0.04 both arms. The routed reference_accel reached the controller (reference_accel_source=acc_idm, value = IDM) and was destroyed downstream: the measured-jerk throttle cap (max_jerk 0.7 m/s3 on a 13 FPS second difference of speed) fires on 40-60% of frames. The harness plant has a noiseless speed signal, so it modelled a droop mechanism (P-loop vs resistance) that is real but not the dominant one in Unity. Flag reverted to false; code kept.",
+    "iterations_spent": 2,
+    "files_changed": [
+      "av_stack/orchestrator.py",
+      "config/av_stack_config.yaml",
+      "tests/acc_closedloop_harness.py",
+      "tests/test_acc_closedloop.py"
+    ],
+    "superseded_by": null,
+    "resolved_by": null
+  },
+  {
+    "date": "2026-09-26",
+    "target_metric": "ACC post-convergence gap bias / RMSE vs IDM equilibrium (comfort gates as guard)",
+    "target_track": "hill_g1_grade_following",
+    "approach": "control.longitudinal.max_jerk 0.7 -> 6.0 (measured-jerk throttle cap threshold aligned with the comfort-gate jerk P95). run_ab_batch 5 pairs x 120 s, routing decel-only in both arms.",
+    "fix_level": "CONFIG",
+    "hypothesis": "The measured-jerk cap fires on 40-54% of frames because a 13 FPS second difference of speed (p50 2.15 m/s3, p95 8.1) is noise against a 0.7 threshold; it is what destroys IDM's positive command. Raising the threshold should let the command through with comfort still inside gates.",
+    "outcome": "NO_IMPROVEMENT",
+    "outcome_status": "OPEN",
+    "metric_before": 3.8,
+    "metric_after": 3.6,
+    "root_cause_of_failure": "proxy_approximation",
+    "root_cause_detail": "Cap firing 42% -> 12%, delivered accel_cmd_raw +0.02 -> +0.10, accel P95 0.62 -> 0.73 (gate 3.0), jerk P95 2.59 -> 3.08 (gate 6.0), TTC/contact unchanged. Bias +3.8 -> +3.6 only; post-conv RMSE vs EQ 7.1 -> 14.3 (gap oscillates more), composite 98.3 -> 96.5. With decel-only routing the accel side is the P-only speed loop, so freeing the cap delivers 0.12 x droop (~0.1), not IDM's +0.39. Combined test (cap 6.0 + both-sign routing) is journal #25.",
+    "iterations_spent": 3,
+    "files_changed": [
+      "config/av_stack_config.yaml"
+    ],
+    "superseded_by": null,
+    "resolved_by": null
+  },
+  {
+    "date": "2026-09-26",
+    "target_metric": "ACC post-convergence gap bias / RMSE vs IDM equilibrium",
+    "target_track": "hill_g1_grade_following",
+    "approach": "Combined: control.longitudinal.max_jerk 6.0 in both arms; acc_idm_accel_routing_positive false vs true. run_ab_batch 5 pairs x 120 s.",
+    "fix_level": "CODE_PATCH",
+    "hypothesis": "Journal #23 (routing) and #24 (jerk cap) each failed alone for complementary reasons; together the routed IDM command should get through and close the gap to equilibrium.",
+    "outcome": "REGRESSION",
+    "outcome_status": "OPEN",
+    "metric_before": 13.3,
+    "metric_after": 45.7,
+    "root_cause_of_failure": "oscillation",
+    "root_cause_detail": "Bias +3.7 -> +2.6 but post-conv RMSE 13.3 -> 45.7, Behavior 92.8 -> 79.6, composite 96.8 -> 94.7; safety unchanged. Delivered accel_cmd_raw +0.12 in BOTH arms: a delivery ceiling downstream of the jerk cap and the routing (candidates: measured-accel cap from the same noisy derivative, throttle_curve_gamma 1.4 on small commands, straight_throttle_cap, Unity throttle deadband). Pushing more command into that ceiling produces chatter, not tracking. Reverted max_jerk to 0.7; both kill-switches off. Next: trace commanded accel -> throttle -> unity_feedback applied throttle -> achieved accel on one steady run; add dt jitter to the harness.",
+    "iterations_spent": 4,
+    "files_changed": [
+      "config/av_stack_config.yaml"
+    ],
+    "superseded_by": null,
+    "resolved_by": null
   }
 ]
