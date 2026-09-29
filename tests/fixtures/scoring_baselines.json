@@ -1,6 +1,6 @@
 {
   "schema_version": "1",
-  "description": "Frozen per-track metric baselines for scoring regression detection. 2026-09-28: re-frozen on the SAME golden recordings after the lateral-error scoring frame moved from the lookahead reference point (ref_x, 3.7-7.2 m ahead) to the Unity at-car road-frame cross-track (T-METRIC-LATERAL-ERROR-FRAME; scoring_registry.LATERAL_ERROR_SCORING_FRAME). Previous (lookahead-frame) values, same files: s_loop 99.1/0.067, highway_65 99.5/0.038, hairpin_15 98.7/0.097, sweeping_highway 98.3/0.247, mixed_radius 98.7/0.095, hill_highway 97.6/0.171 (overall / adj_rmse). s_loop and hairpin_15 drop to 79.0 and 59.0 because the car really is 0.35 / 0.60 m RMS off lane centre there; the lookahead frame had been under-reporting tight-curve error and over-reporting gentle-curve error.",
+  "description": "Frozen per-track metric baselines for scoring regression detection. 2026-09-28: goldens re-registered to the 2026-09-26/28 daytime sweep recordings (first fresh lateral runs since April) and scored in the at-car lateral frame (T-METRIC-LATERAL-ERROR-FRAME). Same-day intermediate (April goldens, at-car frame): s_loop 79.0/0.345, highway_65 99.6/0.027, hairpin_15 59.0/0.600, sweeping_highway 98.7/0.093, mixed_radius 99.3/0.049, hill_highway 99.5/0.033 (overall / adj_rmse). Lookahead-frame April values: s_loop 99.1/0.067, highway_65 99.5/0.038, hairpin_15 98.7/0.097, sweeping_highway 98.3/0.247, mixed_radius 98.7/0.095, hill_highway 97.6/0.171.",
   "frozen_at": "2026-09-28",
   "tolerances": {
     "overall_score": 2.0,
@@ -12,46 +12,45 @@
   "tracks": {
     "s_loop": {
       "overall_score": 79.0,
-      "lateral_error_adj_rmse": 0.345,
+      "lateral_error_adj_rmse": 0.348,
       "lateral_error_adj_p95": 0.5,
-      "accel_p95_filtered": 0.691,
-      "commanded_jerk_p95": 0.624
+      "accel_p95_filtered": 0.704,
+      "commanded_jerk_p95": 1.084
     },
     "highway_65": {
       "overall_score": 99.6,
-      "lateral_error_adj_rmse": 0.027,
-      "lateral_error_adj_p95": 0.087,
-      "accel_p95_filtered": 0.552,
+      "lateral_error_adj_rmse": 0.031,
+      "lateral_error_adj_p95": 0.093,
+      "accel_p95_filtered": 0.569,
       "commanded_jerk_p95": 0.624
     },
     "hairpin_15": {
       "overall_score": 59.0,
-      "lateral_error_adj_rmse": 0.6,
-      "lateral_error_adj_p95": 1.187,
-      "accel_p95_filtered": 0.702,
-      "commanded_jerk_p95": 0.624
+      "lateral_error_adj_rmse": 0.594,
+      "lateral_error_adj_p95": 1.216,
+      "accel_p95_filtered": 0.806,
+      "commanded_jerk_p95": 1.56
     },
     "sweeping_highway": {
-      "overall_score": 98.7,
-      "lateral_error_adj_rmse": 0.093,
-      "lateral_error_adj_p95": 0.152,
-      "accel_p95_filtered": 0.619,
+      "overall_score": 98.6,
+      "lateral_error_adj_rmse": 0.099,
+      "lateral_error_adj_p95": 0.186,
+      "accel_p95_filtered": 0.571,
       "commanded_jerk_p95": 0.624
     },
     "mixed_radius": {
-      "overall_score": 99.3,
-      "lateral_error_adj_rmse": 0.049,
-      "lateral_error_adj_p95": 0.082,
+      "overall_score": 99.1,
+      "lateral_error_adj_rmse": 0.062,
+      "lateral_error_adj_p95": 0.118,
       "accel_p95_filtered": 0.633,
       "commanded_jerk_p95": 0.624
     },
     "hill_highway": {
       "overall_score": 99.5,
-      "lateral_error_adj_rmse": 0.033,
-      "lateral_error_adj_p95": 0.064,
-      "accel_p95_filtered": 0.882,
-      "commanded_jerk_p95": 0.624
+      "lateral_error_adj_rmse": 0.035,
+      "lateral_error_adj_p95": 0.071,
+      "accel_p95_filtered": 0.898,
+      "commanded_jerk_p95": 0.78
     }
-  },
-  "previous_frame_note": "Goldens: 2026-04-17/18 files (hairpin 04-18, sweeping_highway 2026-08-13). Lookahead-frame baselines retained in description for audit."
+  }
 }

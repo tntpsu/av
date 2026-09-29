@@ -47,15 +47,15 @@ COMFORT_GATES: dict[str, float] = _REGISTRY_COMFORT_GATES
 # 2026-04-17: re-baselined after q_lat=1.0 revert (commit 535724d) for 4 tracks.
 # 2026-04-18: hairpin_15 re-baselined after PP recovery term landed (replaces orchestrator post-limiter multiplier).
 BASELINE_SCORES: dict[str, float] = {
-    # 2026-09-28: re-frozen on the same goldens after the lateral-error scoring frame moved to the
-    # Unity at-car road-frame cross-track (T-METRIC-LATERAL-ERROR-FRAME). Lookahead-frame values
-    # in the trailing comment. s_loop / hairpin_15 are genuinely 0.35 / 0.60 m RMS off centre.
-    "s_loop":           79.0,   # was 99.1 (lookahead frame, 2026-04-17)
-    "highway_65":       99.6,   # was 99.5
-    "hairpin_15":       59.0,   # was 98.7 (2026-04-18 PP recovery term golden)
-    "sweeping_highway": 98.7,   # was 98.3 (2026-09-25 re-registration, recording_20260813_184354.h5)
-    "mixed_radius":     99.3,   # was 98.7
-    "hill_highway":     99.5,   # was 97.6 — the "apex cutting residual" was the lookahead frame's chord sag
+    # 2026-09-28: goldens re-registered to the 2026-09-26/28 daytime sweep and scored in the at-car
+    # lateral frame (T-METRIC-LATERAL-ERROR-FRAME). April-golden values in the trailing comments
+    # (at-car frame / lookahead frame). s_loop and hairpin_15 are truthful: 0.35 / 0.59 m RMS off centre.
+    "s_loop":           79.0,   # April golden: 79.0 at-car / 99.1 lookahead
+    "highway_65":       99.6,   # 99.6 / 99.5
+    "hairpin_15":       59.0,   # 59.0 / 98.7
+    "sweeping_highway": 98.6,   # 98.7 / 98.3 (Aug-13 golden)
+    "mixed_radius":     99.1,   # 99.3 / 98.7
+    "hill_highway":     99.5,   # 99.5 / 97.6
 }
 
 # Per-track score tolerances (default 2.0). Wider for tracks with structural variance.
@@ -76,13 +76,13 @@ SCORE_TOLERANCE = 2.0  # Default — used when track not in SCORE_TOLERANCES.
 # the floor is removed here — so the list can only shrink deliberately.
 GOLDEN_BELOW_FLOOR: dict[str, dict[str, str]] = {
     "s_loop": {
-        "traj_yellow": "Trajectory 79.2 < 80 — at-car lateral RMSE 0.345 m on R40 (was 99.1 in the lookahead frame)",
+        "traj_yellow": "Trajectory 79.1 < 80 — at-car lateral RMSE 0.348 m on R40 (99.1 in the lookahead frame)",
         "lateral_p95": "at-car lateral P95 0.50 m > 0.40 m gate",
     },
     "hairpin_15": {
-        "traj_red": "Trajectory 50.0 < 60 — at-car lateral RMSE 0.60 m / P95 1.19 m on R15 (was 98.7 in the lookahead frame)",
-        "traj_yellow": "Trajectory 50.0 < 80",
-        "lateral_p95": "at-car lateral P95 1.19 m > 0.40 m gate",
+        "traj_red": "Trajectory 50.3 < 60 — at-car lateral RMSE 0.59 m / P95 1.22 m on R15 (98.7 in the lookahead frame)",
+        "traj_yellow": "Trajectory 50.3 < 80",
+        "lateral_p95": "at-car lateral P95 1.22 m > 0.40 m gate",
     },
 }
 

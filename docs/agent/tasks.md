@@ -555,8 +555,10 @@ fallback only; both frames are reported (`lateral_error_frame`,
 `analyze_drive_overall.py` prints both. Baselines re-frozen on the SAME goldens:
 s_loop 99.1→79.0, highway_65 99.5→99.6, hairpin_15 98.7→59.0, sweeping 98.3→98.7,
 mixed 98.7→99.3, hill 97.6→99.5. s_loop/hairpin floor breaches are strict xfails via
-`GOLDEN_BELOW_FLOOR` (tests/conftest.py). Open: re-register goldens to 2026-09-26
-recordings (next commit); fix the tight-curve tracking itself (T-PP-PLANT-MODEL).
+`GOLDEN_BELOW_FLOOR` (tests/conftest.py). Goldens re-registered the same day to the
+2026-09-26/28 sweep recordings (s_loop 79.0, highway_65 99.6, hairpin_15 59.0,
+sweeping_highway 98.6, mixed_radius 99.1, hill_highway 99.5). Open: fix the tight-curve
+tracking itself (T-PP-PLANT-MODEL — now aimed at R40/R15, A/B on s_loop).
 
 
 ### T-PP-PLANT-MODEL — Pure Pursuit's feedforward runs on the wrong plant (2026-09-28)
