@@ -505,6 +505,44 @@ Step 2 (after a week of numbers): promote to a Trajectory-layer deduction or a
 that is a scoring change → baseline re-freeze per protocol. Until then the
 sweep prints it and must not gate on it.
 
+### T-CLOCK-SYNTHETIC-CAPTURE-TIMESTAMP — P0 — the recorded clock is not a clock (2026-09-29)
+
+`vehicle/timestamps` = `camera/timestamps` = `control/timestamps` = Unity CameraCapture's
+`captureClock` (`CameraCapture.cs:657,672`): it advances `1/targetFPS` (= 1/13 s) per
+capture regardless of the real interval, resyncing to real time only past
+`captureGapWarnSeconds`. Real captures arrive at ~21.6 Hz, so the recorded clock runs
+**1.74–2.02× faster than `vehicle/unity_time`** on every recording checked (April goldens,
+Aug-13, Sep-26/28/29). The divergence has been recorded on every frame for months
+(`vehicle/stream_front_unity_dt_ms` 3.4 s → 60.7 s within one run;
+`stream_front_timestamp_minus_realtime_ms` 0.8 s → 58 s) and read by nothing.
+
+Consequences (all measured on recording_20260929_001818 / 20260926_171857):
+- **Scorer**: `data['time']` is this clock. Raw |accel| p95 1.41 → 2.40 and 2.43 → 4.77 m/s²
+  on the Unity clock; raw |jerk| p95 18.7 → 60.3 and 44.5 → 168 m/s³ (ratio², 3.2–3.8×).
+  Filtered/commanded comfort metrics scale the same way → the comfort gates (accel ≤ 3,
+  jerk ≤ 6) have been graded on numbers ~2× / ~3.5× too small.
+- **Controllers**: `orchestrator.py:4837` derives `control_dt` from the same timestamp →
+  every rate limiter, jerk limiter, EMA time constant, PP steering-rate cap and the ACC
+  integration run with dt ≈ 0.077 s while real dt ≈ 0.046 s: limits are ~1.7× more
+  permissive in real seconds, integrators ~1.7× fast. `acc.use_measured_dt` "measures"
+  this clock too. `stack.target_loop_hz: 13.0` and `project_cadence_13fps` describe the
+  synthetic clock, not the machine (real ≈ 21.6 Hz; Unity 60 FPS).
+- **ACC harness** `FRAME_DT_MEASURED_S = 0.0769` was "measured" from this clock.
+- Every time-constant tuned since the synthetic clock landed was tuned in fake seconds.
+
+Done tonight: `compute_clock_audit()` in `drive_summary_core.py` — report-only block
+(`clock_audit` in the summary, CLOCK AUDIT lines in `analyze_drive_overall.py`). Scoring
+unchanged.
+
+Fix plan (user decision — each step moves every baseline / time constant):
+1. Unity: send `Time.unscaledTime` (or `fixedTime` in GT-sync) as the frame timestamp; keep
+   the monotonic guard, drop the synthetic advance. Python fallback: orchestrator
+   `control_dt` from `unityTime` deltas (already in the state dict) with the 10–250 ms clamp.
+2. Scorer time base → `vehicle/unity_time` (registry switch, era-aware: all recordings since
+   April carry it); re-freeze baselines; expect comfort-gate FAILs that are real.
+3. Re-derive `FRAME_DT_MEASURED_S`, `target_loop_hz`, and re-validate every time-based
+   limiter by A/B once dt is real (they will bite ~1.7× harder).
+
 ### T-METRIC-LATERAL-ERROR-FRAME — the scored lateral error is measured 4–7 m ahead of the car (2026-09-28)
 
 `control/lateral_error` = `ref_x` (`pid_controller.py:1301`): the vehicle-frame x of

@@ -1257,6 +1257,11 @@ def _print_summary_report(recording_path: Path, summary: Dict, analyze_to_failur
     print("2. PATH TRACKING PERFORMANCE")
     print("-" * 80)
     print(f"   Lateral Error RMSE: {path_tracking.get('lateral_error_rmse', 0.0):.4f} m  [{path_tracking.get('lateral_error_frame', 'lookahead')} frame; lookahead ref_x RMSE {path_tracking.get('lateral_error_lookahead_rmse') or 0.0:.4f} m]")
+    _ca = summary.get("clock_audit") if isinstance(summary, dict) else None
+    if _ca:
+        print(f"   CLOCK AUDIT (report-only, T-CLOCK-SYNTHETIC-CAPTURE-TIMESTAMP): recorded clock spans {_ca['recorded_span_s']:.1f} s vs Unity time {_ca['unity_time_span_s']:.1f} s "
+              f"(ratio {_ca['clock_ratio_recorded_over_unity']:.2f}, real frame rate {_ca['real_frame_rate_hz']:.1f} Hz, recorded dt median {_ca['recorded_dt_median_s'] or 0:.4f} s)")
+        print(f"   CLOCK AUDIT raw |accel| p95: recorded clock {_ca['raw_accel_p95_recorded_clock'] or 0:.2f} → Unity clock {_ca['raw_accel_p95_unity_clock'] or 0:.2f} m/s²; raw |jerk| p95: {_ca['raw_jerk_p95_recorded_clock'] or 0:.1f} → {_ca['raw_jerk_p95_unity_clock'] or 0:.1f} m/s³")
     print(f"   Lateral Error P95:  {path_tracking.get('lateral_error_p95', 0.0):.4f} m")
     print(f"   Heading Error RMSE: {path_tracking.get('heading_error_rmse', 0.0):.4f} rad")
     print(f"   Time in Lane:       {path_tracking.get('time_in_lane', 0.0):.1f}%")

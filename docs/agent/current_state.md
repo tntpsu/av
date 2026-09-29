@@ -1,7 +1,30 @@
 # AV Stack — Agent Memory: Current State
 
-**Last updated:** 2026-09-28
+**Last updated:** 2026-09-29
 **Current milestone:** S2-M1 — **5 of 5 tracks still meeting all-layers-≥95 goal.** ACC emergency brake authority restored on G2 (885 → 2 e-stops, 99.8% reduction) via plan `acc-idm-accel-plumbing.md`. Frenet-frame MPC reference remains in shadow-mode.
+
+## 2026-09-29 — P0: the recorded clock is not a clock (T-CLOCK-SYNTHETIC-CAPTURE-TIMESTAMP)
+
+`vehicle/timestamps` is Unity CameraCapture's `captureClock` — a counter advancing
+1/13 s per capture (`CameraCapture.cs:657,672`) — while real captures arrive at ~21.6 Hz.
+On every recording checked (April → today) it spans 1.74–2.02× `vehicle/unity_time`.
+The scorer's `data['time']`, all comfort metrics, and `orchestrator.py:4837`'s
+`control_dt` (every rate/jerk limiter, EMA, ACC integration) run on it. Raw |accel| p95
+on the Unity clock is ~2× the recorded value, raw |jerk| p95 ~3.5×. "13 FPS" was this
+clock; the machine runs the pipeline at ~21.6 Hz. Report-only `clock_audit` added to the
+scorer; the switch (Unity timestamp → real time, scorer time base → unity_time,
+re-validate every time constant) is a user decision. Details + fix plan in tasks.md.
+
+## 2026-09-29 — Plant-model PP feedforward: A/B negative on both tracks, flag off
+
+`pp_map_ff_plant_model_enabled` (δ_ff = κ·(L+K_us·v²)/maxSteerAtSpeed): s_loop at-car RMSE
+0.346 → 0.404 (Traj 79.2 → 73.6); mixed_radius 0.057 → 0.064. Per curve: the car is
+already 0.45 m INSIDE on R40 (compensators tuned to zero ref_x over-steer ~15 %), and on
+R200 the total steer is identical in both arms (the ref_x feedback zero sets the
+equilibrium). The lateral loop must be re-based on the at-car error; FF gain is not the
+lever. Also: the April sysid plant predicts 0.053 normalised steer to hold R200 at 9.4 m/s;
+the car holds it with 0.033 — the plant model is unvalidated closed-loop, and all its
+rates were measured on the ~2× clock above.
 
 ## 2026-09-28 — Lateral error is now scored AT THE CAR (T-METRIC-LATERAL-ERROR-FRAME)
 

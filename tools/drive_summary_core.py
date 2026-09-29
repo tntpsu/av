@@ -5346,6 +5346,53 @@ def _compute_grade_metrics(data: Dict, n_frames: int) -> Optional[Dict]:
 
 
 
+def compute_clock_audit(f) -> Optional[Dict]:
+    """Report-only (2026-09-29, T-CLOCK-SYNTHETIC-CAPTURE-TIMESTAMP).
+
+    `vehicle/timestamps` (= camera/control timestamps) is Unity's CameraCapture
+    `captureClock`: it advances 1/targetFPS per capture (1/13 s) whatever the real
+    frame interval was, so it runs ~1.7–2.0× faster than `vehicle/unity_time`. Every
+    dt-derived quantity on the recorded clock (accel, jerk, steering rate, cadence,
+    "13 FPS") is therefore under-reported by that ratio (jerk by ratio²). This audit
+    puts the Unity-clock numbers next to the recorded ones; scoring is unchanged.
+    """
+    if 'vehicle/timestamps' not in f or 'vehicle/unity_time' not in f or 'vehicle/speed' not in f:
+        return None
+    t = np.asarray(f['vehicle/timestamps'][:], dtype=float)
+    ut = np.asarray(f['vehicle/unity_time'][:], dtype=float)
+    v = np.asarray(f['vehicle/speed'][:], dtype=float)
+    n = min(len(t), len(ut), len(v))
+    if n < 50:
+        return None
+    t, ut, v = t[:n], ut[:n], v[:n]
+    rec_span = float(t[-1] - t[0]); unity_span = float(ut[-1] - ut[0])
+    if unity_span <= 1.0 or rec_span <= 1.0:
+        return None
+
+    def _rates(clock):
+        dt = np.diff(clock); ok = np.isfinite(dt) & (dt > 1e-6)
+        a = np.diff(v)[ok] / dt[ok]
+        j = np.diff(a) / dt[ok][1:] if a.size > 2 else np.array([])
+        a = a[np.isfinite(a)]; j = j[np.isfinite(j)]
+        return (float(np.percentile(np.abs(a), 95)) if a.size else None,
+                float(np.percentile(np.abs(j), 95)) if j.size else None,
+                float(np.median(dt[ok])) if ok.any() else None)
+    a_rec, j_rec, dt_rec = _rates(t)
+    a_uni, j_uni, dt_uni = _rates(ut)
+    return {
+        "recorded_span_s": rec_span,
+        "unity_time_span_s": unity_span,
+        "clock_ratio_recorded_over_unity": rec_span / unity_span,
+        "recorded_dt_median_s": dt_rec,
+        "real_frame_rate_hz": (n - 1) / unity_span,
+        "raw_accel_p95_recorded_clock": a_rec,
+        "raw_accel_p95_unity_clock": a_uni,
+        "raw_jerk_p95_recorded_clock": j_rec,
+        "raw_jerk_p95_unity_clock": j_uni,
+        "note": "report-only; scoring still uses the recorded clock",
+    }
+
+
 def select_lateral_error_frame(f, lookahead, frame: str = LATERAL_ERROR_SCORING_FRAME) -> Dict:
     """Pick the lateral-error array the scorer grades (T-METRIC-LATERAL-ERROR-FRAME).
 
@@ -6050,6 +6097,10 @@ def analyze_recording_summary(
             _lat_sel = select_lateral_error_frame(
                 f, np.array(f['control/lateral_error'][:]) if 'control/lateral_error' in f else None
             )
+            try:
+                data['clock_audit'] = compute_clock_audit(f)
+            except Exception:
+                data['clock_audit'] = None
             data['lateral_error'] = _lat_sel['lateral_error']
             data['lateral_error_lookahead'] = _lat_sel['lookahead']
             data['lateral_error_at_car'] = _lat_sel['at_car']
@@ -11277,6 +11328,7 @@ def analyze_recording_summary(
                 "critical_layer_status": critical_layer_colors,
             },
         },
+        "clock_audit": data.get('clock_audit'),
         "path_tracking": {
             "lateral_error_rmse": safe_float(lateral_error_rmse),
             "lateral_error_mean": safe_float(lateral_error_mean),
