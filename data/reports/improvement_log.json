@@ -287,5 +287,42 @@
     "prevention": "Record sensor frame/offset in provenance (done); recorder<->analyzer schema contract test asserting every safety signal has a reader; harness sensor models default to the measured frame, not the idealised one; scorer collision from lead_collision_detected.",
     "detection_method": "Unity A/B disagreed with harness; lead_collision_detected scan across September recordings; AVBridge.cs read",
     "detection_delay_iterations": 4
+  },
+  {
+    "date": "2026-09-28",
+    "commit_summary": "561df49 fix(config): speed_drag_gain derive-table base 0.035 \u2192 0.0 to match T-ACC-DRAG removal",
+    "issue": "e3474e2 zeroed control.longitudinal.speed_drag_gain in the base config but the orchestrator's _SPEED_CONTROL_SCALING_PARAMS table still carried 0.035; tests/test_auto_derive_curvature.py::test_speed_control_params_exist_in_base_config was REAL_BREAK for two nights and the nightly agent read it as 'the removal was silently undone'. Recording snapshots show 0.0 ran \u2014 the table never overrode the explicit key.",
+    "deduction_eliminated": "none (test consistency); prevented a false 'fix undone' diagnosis from steering the next ACC A/B",
+    "tracks_affected": [
+      "highway_65",
+      "hill_highway",
+      "acc_*"
+    ],
+    "root_cause": "Two sources of truth for one parameter (YAML base value + derive-table base) with a test enforcing equality but no lint at edit time.",
+    "process_stage": "implementation",
+    "process_sub": "implementation/wrong-config",
+    "prevention": "Derive-table entries should read their base from the loaded config instead of restating it; until then, run tests/test_auto_derive_curvature.py after any control.longitudinal / control.lateral YAML edit.",
+    "detection_method": "full pytest run before commit (-x stopped on it)",
+    "detection_delay_iterations": 0
+  },
+  {
+    "date": "2026-09-28",
+    "commit_summary": "ea2b92b feat(scoring): grade lateral error at the car, not at the lookahead reference point",
+    "issue": "control/lateral_error is ref_x \u2014 the trajectory reference point's vehicle-frame offset 3.7\u20137.2 m ahead (= d_at_car + Ld\u00b7sin \u03c8 + \u00bdLd\u00b2\u03ba). Every lateral RMSE/P95, the 0.40 m comfort gate, out-of-lane, centered %, the apex/late-turn-in classifier and every A/B graded it. Against Unity's at-car road-frame cross-track (fiducial-verified) it over-reported gentle curves 2\u20135\u00d7 (hill_highway 0.192 vs 0.033) and UNDER-reported tight ones (s_loop 0.116 vs 0.345, hairpin_15 0.173 vs 0.600). Months of curve tuning, the 'PP ceiling' and the CURVATURE_FLOOR_COEFF proxy were aimed at measurement geometry.",
+    "deduction_eliminated": "hill_highway Trajectory penalty 30 (cap) \u2192 ~1 on the April golden; sweeping_highway Traj 92.9 \u2192 95.4 (passes); s_loop 99.1 \u2192 79.0 and hairpin 98.7 \u2192 59.0 (honesty, not regression \u2014 strict xfail via GOLDEN_BELOW_FLOOR)",
+    "tracks_affected": [
+      "s_loop",
+      "hairpin_15",
+      "sweeping_highway",
+      "mixed_radius",
+      "hill_highway",
+      "highway_65"
+    ],
+    "root_cause": "The controller's convenience error signal (reference-point offset) was adopted as the product metric without a frame definition; the MPC branch corrected its own copy in April (Frenet d) but the scorer never followed. The recorder's at-car ground truth existed on every file since April and was read by nothing.",
+    "process_stage": "requirements",
+    "process_sub": "requirements/wrong-metric",
+    "prevention": "Every scored quantity names its frame and reference point in scoring_registry; any 'floor' or 'unavoidable error' constant in the scorer must cite the physics (a measurement artifact is a metric bug, not a floor). Cross-check scored error against an independent ground truth (fiducials) when registering goldens.",
+    "detection_method": "A/B on pp_map_ff_wheelbase_m: steering changed 25%, in-curve error did not move at all \u2192 decomposed control/lateral_error against mpc_gt_cross_track_at_car_m and the lane-line fiducials",
+    "detection_delay_iterations": 1
   }
 ]

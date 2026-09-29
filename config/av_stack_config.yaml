@@ -86,6 +86,16 @@ control:
     pp_map_ff_phase_gate_enabled: true   # now proportional: FF *= local_gate_weight (0→1 smoothstep)
     pp_map_ff_entry_boost: 1.8           # unused — proportional mode ignores this
     pp_map_ff_wheelbase_m: 2.5
+    # T-PP-PLANT-MODEL (2026-09-28) — feedforward on the identified plant. Kill-switch:
+    # false = legacy δ_ff = L·κ/30°×max_steering (≈30 % of needed steering at 10 m/s).
+    # true  = δ_ff = κ·(L + K_us·v²) normalised by Unity's speed-dependent max steer
+    #         (Lerp 30°→16° over 0–12 m/s), max_steering as a clip only. Three numbers
+    #         from sysid 2026-04 / CarController.cs — no tuning. A/B pending on s_loop.
+    pp_map_ff_plant_model_enabled: false
+    pp_map_ff_understeer_gradient_s2_per_m: 0.012   # K_us: L_eff = L + K_us·v² (sysid: 3.65 m at 10 m/s)
+    pp_map_ff_max_steer_low_speed_rad: 0.5236       # 30° — Unity maxSteerAngleLowSpeed
+    pp_map_ff_max_steer_high_speed_rad: 0.2793      # 16° — Unity maxSteerAngleHighSpeed
+    pp_map_ff_max_steer_full_speed_mps: 12.0        # Unity maxSteerAngleFullSpeed
     pp_map_ff_curvature_min: 0.0     # removed hard floor — atan(L×κ) is self-limiting; phase gate handles spatial gating
     pp_map_ff_curvature_max_clip: 0.08
     # Lateral-error recovery term (replaces orchestrator post-limiter 1.2×/1.5× steering multiplier).

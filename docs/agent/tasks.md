@@ -580,6 +580,30 @@ lateral RMSE 0.127 → 0.118 (−7 %), |e| p95 0.250 → 0.223, Trajectory 94.4 
 (late turn-in C1, apex cutting C2 +0.14). Right direction, small — the
 wheelbase is one of three factors and the phase gate may deliver the FF late.
 
+**A/B 2026-09-29 00:18–00:29, s_loop, `pp_map_ff_plant_model_enabled` false vs true, 5 pairs,
+at-car frame — NEGATIVE:** at-car RMSE 0.346 → 0.404, p95 0.50 → 0.58, Trajectory 79.2 → 73.6,
+0 e-stops both; the controller's own error (ref_x) fell 0.12 → 0.08. Per-curve (yaw-rate
+signed, `trajectory/reference_point_curvature` is UNSIGNED — never sign by it): R-turns car
+**+0.45 m inside**, L-turns −0.42 m inside (legacy); +0.52 / −0.49 with the plant FF. Mean
+steer in R40 at 3.7 m/s is 0.171 normalised vs 0.148 the plant needs
+(κ·(L+K_us·v²)/maxSteerAtSpeed) → the curve-compensator stack already OVER-steers by ~15 %
+on R40 (it was tuned to drive ref_x → 0, which on a tight curve means sitting inside by
+½Ld²κ + Ld·ψ ≈ 0.11 m + heading term). More feedforward therefore cuts deeper. On gentle
+curves the FF is too weak (30 %); on tight ones the total is too strong — the fix is not an
+FF gain, it is re-basing the lateral feedback on the AT-CAR error and removing the ref_x-tuned
+compensators. Flag stays false; code kept as the correct feedforward for the rebuilt loop.
+**mixed_radius A/B (same night, 5 pairs):** at-car RMSE 0.057 → 0.064, Traj 97.2 → 96.8, 0
+e-stops; per curve the TOTAL steer is identical in both arms (0.033 normalised — the
+feedback gave back exactly what the FF added) and the car sits 0.065 m OUTSIDE on R200 in
+both. So on gentle curves the loop's equilibrium is set by the ref_x feedback, not by the
+FF gain, and on tight curves the compensator stack over-steers. Same conclusion from both
+ends: the lateral loop must be re-based on the at-car error. Note also that
+κ·(L+K_us·v²)/maxSteerAtSpeed predicted 0.053 needed vs 0.033 observed holding R200 — the
+April sysid plant (K_us 0.012, gain 0.684) is not validated closed-loop either
+([[feedback_model_validation_before_deployment]]); measure G(v)=κ_actual/steer from the
+recordings before using any plant model in a feedforward (and see T-CLOCK-SYNTHETIC-
+CAPTURE-TIMESTAMP first — every rate in those recordings is on a ~2× clock).
+
 **Fix (physics-first, no tuning):** `δ_ff = κ · (L + K_us·v²)`, normalised by
 Unity's `max_steer_at_speed(v)` (Lerp 30°→16° over 0–12 m/s; the MPC config
 already carries these as `mpc_max_steer_low/high_speed_rad`), and no ×0.7 on

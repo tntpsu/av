@@ -1,6 +1,6 @@
 # AV Stack — Agent Memory: Architecture
 
-**Last updated:** 2026-03-16
+**Last updated:** 2026-09-28
 
 ---
 
@@ -140,11 +140,20 @@ Supporting modules:
 
 ### 5. Control — `control/pid_controller.py` (3,901 lines)
 
+> **Lateral-error frame (2026-09-28):** the scorer grades the car's at-car road-frame
+> cross-track (`ground_truth/selected_lane_cross_track_road_frame_at_car`). The controller's
+> `lateral_error` (ref_x) is the reference point's offset 3.7–7.2 m ahead — a control signal,
+> not the product metric. See T-METRIC-LATERAL-ERROR-FRAME in tasks.md.
+
 **Active lateral mode: Pure Pursuit (default)**
 
 Steering pipeline:
 ```
-Map feedforward (pp_map_ff_gain: 0.8 × κ_map × wheelbase)
+Map feedforward — legacy: δ_ff = L(2.5)·κ_map·gain, normalised by a FIXED 30° and
+  multiplied by max_steering (0.7) → ≈30 % of the steering the plant needs at 10 m/s.
+  T-PP-PLANT-MODEL (`pp_map_ff_plant_model_enabled`, kill-switch, A/B pending):
+  δ_ff = κ·(L + K_us·v²) normalised by Unity's speed-dependent max steer
+  (Lerp 30°→16° over 0–12 m/s); max_steering is a clip only. Sysid 2026-04: K_us 0.012.
   → PP geometric computation
   → Rate limit (pp_max_steering_rate: 0.4)
   → Jerk limit (pp_max_steering_jerk: 18.0)

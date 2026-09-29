@@ -917,6 +917,21 @@ class AVStack:
             pp_map_ff_phase_gate_enabled=bool(
                 lateral_cfg.get('pp_map_ff_phase_gate_enabled', False)
             ),
+            pp_map_ff_plant_model_enabled=bool(
+                lateral_cfg.get('pp_map_ff_plant_model_enabled', False)
+            ),
+            pp_map_ff_understeer_gradient_s2_per_m=float(
+                lateral_cfg.get('pp_map_ff_understeer_gradient_s2_per_m', 0.012)
+            ),
+            pp_map_ff_max_steer_low_speed_rad=float(
+                lateral_cfg.get('pp_map_ff_max_steer_low_speed_rad', 0.5236)
+            ),
+            pp_map_ff_max_steer_high_speed_rad=float(
+                lateral_cfg.get('pp_map_ff_max_steer_high_speed_rad', 0.2793)
+            ),
+            pp_map_ff_max_steer_full_speed_mps=float(
+                lateral_cfg.get('pp_map_ff_max_steer_full_speed_mps', 12.0)
+            ),
             pp_map_ff_entry_boost=float(
                 lateral_cfg.get('pp_map_ff_entry_boost', 1.0)
             ),

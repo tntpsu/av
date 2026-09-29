@@ -569,5 +569,46 @@
     ],
     "superseded_by": null,
     "resolved_by": null
+  },
+  {
+    "date": "2026-09-29",
+    "target_metric": "lateral_error_adj_rmse (at-car frame) / Trajectory",
+    "target_track": "s_loop",
+    "approach": "control.lateral.pp_map_ff_plant_model_enabled false vs true (delta_ff = kappa*(L+K_us*v^2) normalised by Unity speed-dependent max steer, max_steering as clip). run_ab_batch 5 pairs x 60 s.",
+    "fix_level": "CODE (kill-switched)",
+    "hypothesis": "Feedforward delivers only ~30% of the steering the plant needs; supplying the physics-first amount should reduce curve error.",
+    "outcome": "REGRESSION",
+    "outcome_status": "CLOSED",
+    "metric_before": 0.346,
+    "metric_after": 0.404,
+    "root_cause_of_failure": "wrong-mechanism",
+    "root_cause_detail": "At-car RMSE 0.346->0.404, p95 0.498->0.576, Traj 79.2->73.6, 0 e-stops; ref_x (controller error) 0.12->0.08. Per curve (yaw-rate signed): car sits 0.45 m INSIDE on R40 already (legacy), 0.50 with plant FF. Mean normalised steer 0.171 vs 0.148 plant-needed: the compensator stack over-steers ~15% on tight curves because it was tuned to zero ref_x (lookahead-frame error), whose zero is inside the curve by 0.5*Ld^2*kappa + Ld*psi. More FF = deeper cut. Gentle curves (mixed_radius) have the opposite sign of the problem (FF too weak). Fix is re-basing lateral feedback on at-car error + removing ref_x-tuned compensators, not an FF gain.",
+    "iterations_spent": 1,
+    "files_changed": [
+      "control/pid_controller.py",
+      "av_stack/orchestrator.py",
+      "config/av_stack_config.yaml",
+      "tests/test_pp_map_feedforward.py"
+    ],
+    "superseded_by": null,
+    "resolved_by": null
+  },
+  {
+    "date": "2026-09-29",
+    "target_metric": "lateral_error_adj_rmse (at-car) / Trajectory",
+    "target_track": "mixed_radius",
+    "approach": "control.lateral.pp_map_ff_plant_model_enabled false vs true, run_ab_batch 5 pairs x 60 s (second track of the same experiment).",
+    "fix_level": "CODE (kill-switched)",
+    "hypothesis": "On gentle curves the legacy FF is ~30% of plant-needed; the physics-first FF should reduce the outside offset.",
+    "outcome": "NO_EFFECT",
+    "outcome_status": "CLOSED",
+    "metric_before": 0.057,
+    "metric_after": 0.064,
+    "root_cause_of_failure": "wrong-mechanism",
+    "root_cause_detail": "Traj 97.2->96.8, at-car RMSE 0.057->0.064 (noise-level, slightly negative). Per curve: total steer 0.033 in BOTH arms (FF 0.016->0.052; feedback removed the difference), car 0.065 m outside in both. The loop equilibrium is the ref_x feedback zero, FF gain is irrelevant. Plant model also unvalidated: predicted 0.053 needed vs 0.033 observed. Flag stays false.",
+    "iterations_spent": 1,
+    "files_changed": [],
+    "superseded_by": null,
+    "resolved_by": null
   }
 ]

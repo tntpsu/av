@@ -386,6 +386,11 @@ class LateralController:
                  pp_map_ff_curvature_min: float = 0.005,
                  pp_map_ff_curvature_max_clip: float = 0.08,
                  pp_map_ff_phase_gate_enabled: bool = False,
+                 pp_map_ff_plant_model_enabled: bool = False,
+                 pp_map_ff_understeer_gradient_s2_per_m: float = 0.012,
+                 pp_map_ff_max_steer_low_speed_rad: float = 0.5236,
+                 pp_map_ff_max_steer_high_speed_rad: float = 0.2793,
+                 pp_map_ff_max_steer_full_speed_mps: float = 12.0,
                  pp_map_ff_entry_boost: float = 1.0,
                  pp_map_ff_entry_boost_kappa_ref: float = 0.025,
                  pp_map_ff_entry_boost_kappa_max: float = 0.045,
@@ -665,6 +670,19 @@ class LateralController:
         self.pp_map_ff_curvature_min = max(0.0, float(pp_map_ff_curvature_min))
         self.pp_map_ff_curvature_max_clip = max(0.001, float(pp_map_ff_curvature_max_clip))
         self.pp_map_ff_phase_gate_enabled = bool(pp_map_ff_phase_gate_enabled)
+        # T-PP-PLANT-MODEL (2026-09-28): feedforward on the identified plant instead of the
+        # nominal kinematic bicycle. δ_ff = κ·(L + K_us·v²) is the steady-state wheel angle a
+        # plant with understeer gradient K_us needs (sysid 2026-04: L_eff 3.65 m at 10 m/s =
+        # 2.5 + 0.012·10²). Unity applies the normalised command against a speed-dependent
+        # max angle (Lerp 30°→16° over 0–12 m/s, CarController.maxSteerAngle*Speed), so the
+        # command is normalised by THAT, and max_steering is the clip it always was — not a
+        # gain. Legacy path (flag False): δ_ff = L·κ, /30°, ×max_steering → ≈30 % of the
+        # needed steering at 10 m/s.
+        self.pp_map_ff_plant_model_enabled = bool(pp_map_ff_plant_model_enabled)
+        self.pp_map_ff_understeer_gradient_s2_per_m = float(np.clip(pp_map_ff_understeer_gradient_s2_per_m, 0.0, 0.1))
+        self.pp_map_ff_max_steer_low_speed_rad = float(np.clip(pp_map_ff_max_steer_low_speed_rad, 0.05, 1.0))
+        self.pp_map_ff_max_steer_high_speed_rad = float(np.clip(pp_map_ff_max_steer_high_speed_rad, 0.05, self.pp_map_ff_max_steer_low_speed_rad))
+        self.pp_map_ff_max_steer_full_speed_mps = max(0.1, float(pp_map_ff_max_steer_full_speed_mps))
         self.pp_map_ff_entry_boost = max(1.0, float(pp_map_ff_entry_boost))
         self.pp_map_ff_entry_boost_kappa_ref = max(0.001, float(pp_map_ff_entry_boost_kappa_ref))
         self.pp_map_ff_entry_boost_kappa_max = max(
@@ -2754,15 +2772,28 @@ class LateralController:
                         self.pp_map_ff_curvature_max_clip,
                     )
                 )
-                _ff_rad = self.pp_map_ff_wheelbase_m * _raw_curv * self.pp_map_ff_gain
-                _max_steer_rad = float(np.radians(30.0))
-                _pp_map_ff_applied = float(
-                    np.clip(
-                        _ff_rad / _max_steer_rad * self.max_steering,
-                        -self.max_steering,
-                        self.max_steering,
+                if self.pp_map_ff_plant_model_enabled:
+                    _v = max(0.0, float(current_speed))
+                    _l_eff = self.pp_map_ff_wheelbase_m + self.pp_map_ff_understeer_gradient_s2_per_m * _v * _v
+                    _ff_rad = _l_eff * _raw_curv * self.pp_map_ff_gain
+                    _speed_frac = min(1.0, _v / self.pp_map_ff_max_steer_full_speed_mps)
+                    _max_steer_rad = (
+                        self.pp_map_ff_max_steer_low_speed_rad
+                        + (self.pp_map_ff_max_steer_high_speed_rad - self.pp_map_ff_max_steer_low_speed_rad) * _speed_frac
                     )
-                )
+                    _pp_map_ff_applied = float(
+                        np.clip(_ff_rad / _max_steer_rad, -self.max_steering, self.max_steering)
+                    )
+                else:
+                    _ff_rad = self.pp_map_ff_wheelbase_m * _raw_curv * self.pp_map_ff_gain
+                    _max_steer_rad = float(np.radians(30.0))
+                    _pp_map_ff_applied = float(
+                        np.clip(
+                            _ff_rad / _max_steer_rad * self.max_steering,
+                            -self.max_steering,
+                            self.max_steering,
+                        )
+                    )
                 # Proportional FF: scale by local_gate_weight (0→1 smoothstep
                 # from curve phase scheduler) instead of binary state gate.
                 # Provides continuous ramp into curves, eliminating step-response
@@ -5778,6 +5809,11 @@ class VehicleController:
                  pp_map_ff_curvature_min: float = 0.005,
                  pp_map_ff_curvature_max_clip: float = 0.08,
                  pp_map_ff_phase_gate_enabled: bool = False,
+                 pp_map_ff_plant_model_enabled: bool = False,
+                 pp_map_ff_understeer_gradient_s2_per_m: float = 0.012,
+                 pp_map_ff_max_steer_low_speed_rad: float = 0.5236,
+                 pp_map_ff_max_steer_high_speed_rad: float = 0.2793,
+                 pp_map_ff_max_steer_full_speed_mps: float = 12.0,
                  pp_map_ff_entry_boost: float = 1.0,
                  pp_map_ff_entry_boost_kappa_ref: float = 0.025,
                  pp_map_ff_entry_boost_kappa_max: float = 0.045,
@@ -6042,6 +6078,11 @@ class VehicleController:
             pp_map_ff_curvature_min=pp_map_ff_curvature_min,
             pp_map_ff_curvature_max_clip=pp_map_ff_curvature_max_clip,
             pp_map_ff_phase_gate_enabled=pp_map_ff_phase_gate_enabled,
+            pp_map_ff_plant_model_enabled=pp_map_ff_plant_model_enabled,
+            pp_map_ff_understeer_gradient_s2_per_m=pp_map_ff_understeer_gradient_s2_per_m,
+            pp_map_ff_max_steer_low_speed_rad=pp_map_ff_max_steer_low_speed_rad,
+            pp_map_ff_max_steer_high_speed_rad=pp_map_ff_max_steer_high_speed_rad,
+            pp_map_ff_max_steer_full_speed_mps=pp_map_ff_max_steer_full_speed_mps,
             pp_map_ff_entry_boost=pp_map_ff_entry_boost,
             pp_map_ff_entry_boost_kappa_ref=pp_map_ff_entry_boost_kappa_ref,
             pp_map_ff_entry_boost_kappa_max=pp_map_ff_entry_boost_kappa_max,
