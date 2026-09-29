@@ -714,18 +714,19 @@ class TestSpeedControlScaling:
     # ── speed_drag_gain ──
 
     def test_drag_gain_at_highway(self):
-        """At 15 m/s, speed_drag_gain ≈ 0.012."""
+        """speed_drag_gain is 0 at every speed since T-ACC-DRAG (2026-09-26): the
+        artificial brake was removed; the derive path must not resurrect it."""
         val = _speed_control_derive(
             ("control.longitudinal", "speed_drag_gain"), 15.0
         )
-        assert abs(val - 0.012) < 0.002, f"Expected ~0.012, got {val}"
+        assert abs(val) < 1e-9, f"Expected 0.0, got {val}"
 
     def test_drag_gain_at_autobahn(self):
-        """At 25 m/s, speed_drag_gain = 0.008 (clamped at floor)."""
+        """At 25 m/s speed_drag_gain stays 0 (T-ACC-DRAG)."""
         val = _speed_control_derive(
             ("control.longitudinal", "speed_drag_gain"), 25.0
         )
-        assert abs(val - 0.008) < 1e-5
+        assert abs(val) < 1e-9
 
     # ── accel_target_smoothing_alpha ──
 

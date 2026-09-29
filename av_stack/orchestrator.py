@@ -1806,9 +1806,11 @@ class AVStack:
         # At 15 m/s: 0.70 - 0.033×3 = 0.60; at 25 m/s: clamped to 0.50
         ("control.lateral", "pp_speed_norm_min_scale"):
             (0.70, 12.0, -0.033, 0.50, 0.70),
-        # speed_drag_gain: lighter braking at high speed (less decel authority needed)
+        # speed_drag_gain: removed 2026-09-26 (T-ACC-DRAG) — it was an artificial brake
+        # (plant rb.drag=0) that bought curve-track passes with under-speed. Table entry
+        # kept at 0 across speeds so the derive path and the base config agree.
         ("control.longitudinal", "speed_drag_gain"):
-            (0.035, 12.0, -0.0077, 0.008, 0.035),
+            (0.0, 12.0, 0.0, 0.0, 0.0),
         # accel_target_smoothing_alpha: more responsive accel tracking at high speed
         ("control.longitudinal", "accel_target_smoothing_alpha"):
             (0.86, 12.0, -0.087, 0.50, 0.86),
