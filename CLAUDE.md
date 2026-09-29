@@ -168,6 +168,20 @@ Per-frame data flow: Unity → bridge → perception → EMA gating (av_stack.py
 
 ## Comfort Gates (S1-M39)
 
+**Lateral-error frame (2026-09-28, T-METRIC-LATERAL-ERROR-FRAME):** every lateral
+metric below and in the scorer is measured **at the car** — Unity's road-frame
+cross-track of the car vs the selected lane centre
+(`ground_truth/selected_lane_cross_track_road_frame_at_car`, +right, returned in
+ref_x sign). `control/lateral_error` is ref_x, the reference point's offset
+3.7–7.2 m *ahead* (`= d_at_car + Ld·sin(ψ_err) + ½Ld²κ`); it was the scored quantity
+until 2026-09-28 and is 2–5× the true error on gentle curves while
+**under-reporting** it on tight ones (s_loop 0.14 vs 0.34 m, hairpin 0.19 vs
+0.63 m at the car). The scorer reports both (`lateral_error_frame`,
+`lateral_error_lookahead_rmse`, `lateral_error_at_car_rmse`); the kill-switch is
+`scoring_registry.LATERAL_ERROR_SCORING_FRAME = "lookahead"`. When you quote a
+lateral RMSE, say which frame. The curvature-adjusted floor applies to the
+lookahead frame only.
+
 | Metric | Target |
 |---|---|
 | Accel P95 | ≤ 3.0 m/s² |
@@ -237,6 +251,11 @@ pytest tests/test_scoring_regression.py -v
 > FAIL. Don't quote 60/80 as evidence a run is healthy.
 
 **Baselines file:** `tests/fixtures/scoring_baselines.json` — frozen per-track metrics.
+**Known floor breaches:** `GOLDEN_BELOW_FLOOR` in `tests/conftest.py` lists goldens that
+sit below a drift floor in the at-car frame (s_loop Traj 79.2, hairpin_15 Traj 50.0 as
+of 2026-09-28). `assert_or_known_floor` makes them strict xfails: a fix that lifts a
+track over a listed floor FAILS the suite until the entry is removed — the list can
+only shrink deliberately. Never add to it to make a regression green.
 **Report artifact:** `data/reports/gates/latest_scoring_regression.json` — written after test run.
 
 **To update baselines** after a scoring formula change:

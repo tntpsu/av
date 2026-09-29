@@ -47,6 +47,9 @@ from scoring_registry import (
     MIN_CONSECUTIVE_OOL,
     GT_LANE_BOUNDARY_MAX_ABS_M,
     CURVATURE_FLOOR_COEFF as _CURVATURE_FLOOR_COEFF,
+    LATERAL_ERROR_SCORING_FRAME,
+    LATERAL_ERROR_AT_CAR_FIELDS,
+    LATERAL_ERROR_AT_CAR_MIN_FINITE_FRAC,
     STEERING_JERK_PENALTY_CAP,
     HEADING_PENALTY_FLOOR_DEG,
     ACC_COLLISION_GATE,
@@ -1295,7 +1298,9 @@ def _build_highway_mild_curve_contract_summary(data: Dict) -> Dict:
     unavailable = dict(base)
     unavailable["availability"] = "unavailable"
 
-    lateral_error = data.get("lateral_error")
+    # Contract/diagnostic checks compare the CONTROLLER's own error (ref_x) against
+    # ground truth; use the lookahead array, not the scored (at-car) swap.
+    lateral_error = data.get("lateral_error_lookahead", data.get("lateral_error"))
     road_center_offset = data.get("road_frame_lane_center_offset")
     ref_curvature = data.get("reference_point_curvature")
     pp_lookahead_distance = data.get("pp_lookahead_distance")
@@ -2279,7 +2284,9 @@ def _build_mpc_gt_cross_track_contract_summary(data: Dict) -> Dict:
         "limits": limits,
     }
 
-    lateral_error = data.get("lateral_error")
+    # Contract/diagnostic checks compare the CONTROLLER's own error (ref_x) against
+    # ground truth; use the lookahead array, not the scored (at-car) swap.
+    lateral_error = data.get("lateral_error_lookahead", data.get("lateral_error"))
     source_cross_track = data.get("mpc_gt_cross_track_m")
     at_car_cross_track = data.get("mpc_gt_cross_track_at_car_m")
     road_frame_cross_track = data.get("mpc_gt_cross_track_road_frame_at_car_m")
@@ -4886,7 +4893,9 @@ def _build_wrong_target_contract_summary(
             "out_of_cone_opposite_direction",
         }
     )
-    lateral_error = data.get("lateral_error")
+    # Contract/diagnostic checks compare the CONTROLLER's own error (ref_x) against
+    # ground truth; use the lookahead array, not the scored (at-car) swap.
+    lateral_error = data.get("lateral_error_lookahead", data.get("lateral_error"))
     local_curve_reference_raw_delta = data.get("local_curve_reference_raw_delta_m")
     local_curve_reference_blend_weight = data.get("local_curve_reference_blend_weight")
     guard_center_error = data.get("reference_distractor_guard_center_error_m")
@@ -5335,6 +5344,42 @@ def _compute_grade_metrics(data: Dict, n_frames: int) -> Optional[Dict]:
         "graded_frames": graded_count,
     }
 
+
+
+def select_lateral_error_frame(f, lookahead, frame: str = LATERAL_ERROR_SCORING_FRAME) -> Dict:
+    """Pick the lateral-error array the scorer grades (T-METRIC-LATERAL-ERROR-FRAME).
+
+    `lookahead` is `control/lateral_error` = ref_x, the reference point's offset
+    3.7–7.2 m ahead of the car in the vehicle frame. The at-car alternative is
+    Unity's road-frame cross-track of the car vs the selected lane centre
+    (+right). It is returned in ref_x sign convention (positive = lane centre is
+    to the RIGHT of the car, i.e. negated road-frame d) so every downstream
+    consumer keeps its sign semantics. Falls back to the lookahead array when the
+    recording lacks the field (synthetic fixtures, pre-ground-truth files) or it
+    is mostly non-finite.
+    """
+    out = {"lateral_error": lookahead, "lookahead": lookahead, "at_car": None,
+           "frame": "lookahead", "at_car_field": None}
+    if frame != "at_car" or lookahead is None:
+        return out
+    n = len(lookahead)
+    for key in LATERAL_ERROR_AT_CAR_FIELDS:
+        if key not in f:
+            continue
+        raw = np.asarray(f[key][:], dtype=float)
+        if raw.ndim != 1 or raw.size < n:
+            continue
+        raw = raw[:n]
+        finite = np.isfinite(raw)
+        # The MPC path records 0.0 when Unity's field was absent for the frame
+        # (single-writer default): treat an exactly-zero majority as missing.
+        populated = finite & ~((raw == 0.0) & (key.startswith("control/")))
+        if populated.mean() < LATERAL_ERROR_AT_CAR_MIN_FINITE_FRAC:
+            continue
+        at_car = np.where(finite, raw, 0.0)
+        out.update({"lateral_error": -at_car, "at_car": at_car, "frame": "at_car", "at_car_field": key})
+        return out
+    return out
 
 def analyze_recording_summary(
     recording_path: Path,
@@ -6002,7 +6047,14 @@ def analyze_recording_summary(
 
             # Control data
             data['steering'] = np.array(f['control/steering'][:])
-            data['lateral_error'] = np.array(f['control/lateral_error'][:]) if 'control/lateral_error' in f else None
+            _lat_sel = select_lateral_error_frame(
+                f, np.array(f['control/lateral_error'][:]) if 'control/lateral_error' in f else None
+            )
+            data['lateral_error'] = _lat_sel['lateral_error']
+            data['lateral_error_lookahead'] = _lat_sel['lookahead']
+            data['lateral_error_at_car'] = _lat_sel['at_car']
+            data['lateral_error_frame'] = _lat_sel['frame']
+            data['lateral_error_at_car_field'] = _lat_sel['at_car_field']
             data['heading_error'] = np.array(f['control/heading_error'][:]) if 'control/heading_error' in f else None
             data['total_error'] = np.array(f['control/total_error'][:]) if 'control/total_error' in f else None
             data['total_error_scaled'] = (
@@ -7383,6 +7435,17 @@ def analyze_recording_summary(
     lateral_error_max = safe_float(np.max(np.abs(data['lateral_error'])) if data['lateral_error'] is not None and len(data['lateral_error']) > 0 else 0.0)
     lateral_error_p95 = safe_float(np.percentile(np.abs(data['lateral_error']), 95) if data['lateral_error'] is not None and len(data['lateral_error']) > 0 else 0.0)
 
+    def _frame_stats(arr):
+        if arr is None or len(arr) == 0:
+            return None, None
+        a = np.abs(np.asarray(arr, dtype=float))
+        a = a[np.isfinite(a)]
+        if a.size == 0:
+            return None, None
+        return safe_float(np.sqrt(np.mean(a ** 2))), safe_float(np.percentile(a, 95))
+    lateral_error_lookahead_rmse, lateral_error_lookahead_p95 = _frame_stats(data.get('lateral_error_lookahead'))
+    lateral_error_at_car_rmse, lateral_error_at_car_p95 = _frame_stats(data.get('lateral_error_at_car'))
+
     # Curvature-adjusted lateral error: subtract a geometry-dependent floor per frame.
     # floor = CURVATURE_FLOOR_COEFF * |kappa|  — accounts for arc-chord tracking error
     # that is physically unavoidable for reactive controllers on tight curves.
@@ -7392,7 +7455,10 @@ def analyze_recording_summary(
     _curv_for_floor = data.get('gt_path_curvature')
     if _curv_for_floor is None:
         _curv_for_floor = data.get('path_curvature_input')
-    if (data['lateral_error'] is not None and len(data['lateral_error']) > 0
+    # The arc-chord floor compensates the LOOKAHEAD frame's geometric sag; the
+    # at-car frame has none, so it is graded raw.
+    _lat_frame = data.get('lateral_error_frame', 'lookahead')
+    if (_lat_frame != 'at_car' and data['lateral_error'] is not None and len(data['lateral_error']) > 0
             and _curv_for_floor is not None and len(_curv_for_floor) > 0):
         _n_adj = min(len(data['lateral_error']), len(_curv_for_floor))
         _abs_err = np.abs(data['lateral_error'][:_n_adj])
@@ -11218,6 +11284,12 @@ def analyze_recording_summary(
             "lateral_error_p95": safe_float(lateral_error_p95),
             "lateral_error_adj_rmse": safe_float(lateral_error_adj_rmse),
             "lateral_error_adj_p95": safe_float(lateral_error_adj_p95),
+            "lateral_error_frame": data.get('lateral_error_frame', 'lookahead'),
+            "lateral_error_at_car_field": data.get('lateral_error_at_car_field'),
+            "lateral_error_lookahead_rmse": lateral_error_lookahead_rmse,
+            "lateral_error_lookahead_p95": lateral_error_lookahead_p95,
+            "lateral_error_at_car_rmse": lateral_error_at_car_rmse,
+            "lateral_error_at_car_p95": lateral_error_at_car_p95,
             "heading_error_rmse": safe_float(heading_error_rmse),
             "heading_error_max": safe_float(heading_error_max),
             "time_in_lane": safe_float(time_in_lane),

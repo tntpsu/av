@@ -36,7 +36,7 @@ project_root = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(project_root))
 
 from trajectory.utils import smooth_curvature_distance
-from tools.drive_summary_core import analyze_recording_summary
+from tools.drive_summary_core import analyze_recording_summary, select_lateral_error_frame
 
 
 @dataclass
@@ -186,7 +186,12 @@ class DriveAnalyzer:
                 self.data['emergency_stop'] = (
                     np.array(f['control/emergency_stop'][:]) if 'control/emergency_stop' in f else None
                 )
-                self.data['lateral_error'] = np.array(f['control/lateral_error'][:]) if 'control/lateral_error' in f else None
+                _lat_sel = select_lateral_error_frame(
+                    f, np.array(f['control/lateral_error'][:]) if 'control/lateral_error' in f else None
+                )
+                self.data['lateral_error'] = _lat_sel['lateral_error']
+                self.data['lateral_error_lookahead'] = _lat_sel['lookahead']
+                self.data['lateral_error_frame'] = _lat_sel['frame']
                 self.data['heading_error'] = np.array(f['control/heading_error'][:]) if 'control/heading_error' in f else None
                 self.data['total_error'] = np.array(f['control/total_error'][:]) if 'control/total_error' in f else None
                 self.data['path_curvature_input'] = np.array(f['control/path_curvature_input'][:]) if 'control/path_curvature_input' in f else None
@@ -975,7 +980,12 @@ class DriveAnalyzer:
         # 2. PATH TRACKING PERFORMANCE
         print("2. PATH TRACKING PERFORMANCE")
         print("-" * 80)
-        print(f"   Lateral Error:")
+        _frame = self.data.get('lateral_error_frame', 'lookahead')
+        _la = self.data.get('lateral_error_lookahead')
+        _la_txt = ''
+        if _frame == 'at_car' and _la is not None and len(_la) > 0:
+            _la_txt = f"  (lookahead-frame ref_x RMSE {float(np.sqrt(np.mean(np.asarray(_la, float) ** 2))):.4f} m — the pre-2026-09-28 scored quantity)"
+        print(f"   Lateral Error [{_frame} frame]:{_la_txt}")
         print(f"     RMSE: {self.metrics.lateral_error_rmse:.4f} m")
         print(f"     Mean: {self.metrics.lateral_error_mean:.4f} m")
         print(f"     Max:  {self.metrics.lateral_error_max:.4f} m")
@@ -1246,7 +1256,7 @@ def _print_summary_report(recording_path: Path, summary: Dict, analyze_to_failur
 
     print("2. PATH TRACKING PERFORMANCE")
     print("-" * 80)
-    print(f"   Lateral Error RMSE: {path_tracking.get('lateral_error_rmse', 0.0):.4f} m")
+    print(f"   Lateral Error RMSE: {path_tracking.get('lateral_error_rmse', 0.0):.4f} m  [{path_tracking.get('lateral_error_frame', 'lookahead')} frame; lookahead ref_x RMSE {path_tracking.get('lateral_error_lookahead_rmse') or 0.0:.4f} m]")
     print(f"   Lateral Error P95:  {path_tracking.get('lateral_error_p95', 0.0):.4f} m")
     print(f"   Heading Error RMSE: {path_tracking.get('heading_error_rmse', 0.0):.4f} rad")
     print(f"   Time in Lane:       {path_tracking.get('time_in_lane', 0.0):.1f}%")

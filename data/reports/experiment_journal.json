@@ -525,5 +525,49 @@
     ],
     "superseded_by": null,
     "resolved_by": null
+  },
+  {
+    "date": "2026-09-28",
+    "target_metric": "lateral_error_rmse / Trajectory (curve tracking)",
+    "target_track": "mixed_radius",
+    "approach": "control.lateral.pp_map_ff_wheelbase_m 2.5 -> 3.65 (sysid L_eff at 10 m/s, previously applied only to the disabled MPC). run_ab_batch 5 pairs x 60 s.",
+    "fix_level": "CONFIG",
+    "hypothesis": "PP feedforward uses the nominal kinematic wheelbase on a plant with an understeer gradient (sysid: L_eff 3.65, gain 0.684); using L_eff should reduce apex cutting.",
+    "outcome": "IMPROVEMENT",
+    "outcome_status": "OPEN",
+    "metric_before": 0.127,
+    "metric_after": 0.118,
+    "root_cause_of_failure": null,
+    "root_cause_detail": "Lateral RMSE 0.127 -> 0.118 (q25/q75 0.121-0.129 vs 0.117-0.122), |e|p95 0.250 -> 0.223, Trajectory 94.4 -> 94.8, Overall 98.4 -> 98.6, 0 e-stops, speed 9.7-9.9 both. Key issues unchanged (late turn-in C1, apex cutting C2 +0.14 m). Wheelbase is one of three feedforward-gain factors (L_eff 0.68, Unity speed-dependent max steer 0.61 at 10 m/s, max_steering x0.7); constant L_eff recovers ~14 pts of a ~70 pt delivery deficit. Not applied yet: the proper fix is delta_ff = kappa*(L+K_us*v^2) normalised by max_steer_at_speed(v) without the 0.7 (T-PP-PLANT-MODEL).",
+    "iterations_spent": 1,
+    "files_changed": [],
+    "superseded_by": null,
+    "resolved_by": null
+  },
+  {
+    "date": "2026-09-28",
+    "target_metric": "lateral_error_rmse (scoring frame)",
+    "target_track": "all lateral tracks",
+    "approach": "Switch the scored lateral error from control/lateral_error (ref_x at the reference point 3.7-7.2 m ahead) to Unity at-car road-frame cross-track (ground_truth/selected_lane_cross_track_road_frame_at_car); registry kill-switch LATERAL_ERROR_SCORING_FRAME; baselines re-frozen on the same goldens.",
+    "fix_level": "CODE (scoring)",
+    "hypothesis": "The scored error is a lookahead quantity = d + Ld*sin(psi) + 0.5*Ld^2*kappa, not the car's lane error; months of curve tuning targeted a proxy.",
+    "outcome": "CONFIRMED",
+    "outcome_status": "RESOLVED",
+    "metric_before": null,
+    "metric_after": null,
+    "root_cause_of_failure": null,
+    "root_cause_detail": "Validated against true lane-line fiducials (corr +1.00). Goldens in the at-car frame: s_loop 0.345 m RMSE (scored 0.116), hairpin_15 0.600 (0.173), highway_65 0.027 (0.040), sweeping_highway 0.093 (0.127), mixed_radius 0.049 (0.106), hill_highway 0.033 (0.192). Overall: s_loop 99.1->79.0, hairpin 98.7->59.0, hill 97.6->99.5, sweeping 98.3->98.7. Sep-26 live: s_loop 0.346/Traj 79, hairpin 0.594/Traj 50, hill(budget 0.05) 0.035-0.040/Traj 98, hill(budget 0.08) 0.10-0.12/Traj 94, sweeping 0.099/Traj 95.0, mixed 0.057-0.062/Traj 97.",
+    "iterations_spent": 1,
+    "files_changed": [
+      "tools/scoring_registry.py",
+      "tools/drive_summary_core.py",
+      "tools/analyze/analyze_drive_overall.py",
+      "tests/conftest.py",
+      "tests/fixtures/scoring_baselines.json",
+      "tests/test_scoring_regression.py",
+      "tests/test_comfort_gate_replay.py"
+    ],
+    "superseded_by": null,
+    "resolved_by": null
   }
 ]

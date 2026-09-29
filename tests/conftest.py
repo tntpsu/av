@@ -42,17 +42,20 @@ GOLDEN_MANIFEST_PATH = FIXTURES_DIR / "golden_recordings.json"
 #   steering_jerk_max_max   → summary["comfort"]["steering_jerk_max"]
 COMFORT_GATES: dict[str, float] = _REGISTRY_COMFORT_GATES
 
-# Baseline scores — curvature-adjusted scoring (2026-03-15).
+# Baseline scores — at-car lateral frame (2026-09-28); curvature-adjusted lookahead scoring before that (2026-03-15).
 # hairpin_15 replaced with Stanley k=3.0 golden (was PP 79.0).
 # 2026-04-17: re-baselined after q_lat=1.0 revert (commit 535724d) for 4 tracks.
 # 2026-04-18: hairpin_15 re-baselined after PP recovery term landed (replaces orchestrator post-limiter multiplier).
 BASELINE_SCORES: dict[str, float] = {
-    "s_loop":           99.1,   # 2026-04-17 post q_lat=1.0 revert (was 96.7)
-    "highway_65":       99.5,   # 2026-04-17 post q_lat=1.0 revert (was 96.2)
-    "hairpin_15":       98.7,   # 2026-04-18 PP recovery term landed (was 91.6 Stanley, 79.0 live PP)
-    "sweeping_highway": 98.3,   # 2026-09-25 re-registered from recording_20260813_184354.h5 (March golden missing; 91.4 was stale)
-    "mixed_radius":     98.7,   # 2026-04-17 post q_lat=1.0 revert (was 91.9)
-    "hill_highway":     97.6,   # 2026-04-17 first registration (apex cutting residual keeps Trajectory at 91.5)
+    # 2026-09-28: re-frozen on the same goldens after the lateral-error scoring frame moved to the
+    # Unity at-car road-frame cross-track (T-METRIC-LATERAL-ERROR-FRAME). Lookahead-frame values
+    # in the trailing comment. s_loop / hairpin_15 are genuinely 0.35 / 0.60 m RMS off centre.
+    "s_loop":           79.0,   # was 99.1 (lookahead frame, 2026-04-17)
+    "highway_65":       99.6,   # was 99.5
+    "hairpin_15":       59.0,   # was 98.7 (2026-04-18 PP recovery term golden)
+    "sweeping_highway": 98.7,   # was 98.3 (2026-09-25 re-registration, recording_20260813_184354.h5)
+    "mixed_radius":     99.3,   # was 98.7
+    "hill_highway":     99.5,   # was 97.6 — the "apex cutting residual" was the lookahead frame's chord sag
 }
 
 # Per-track score tolerances (default 2.0). Wider for tracks with structural variance.
@@ -65,6 +68,43 @@ SCORE_TOLERANCES: dict[str, float] = {
     "hill_highway":     3.0,   # new registration — conservative tolerance until multi-session stability data
 }
 SCORE_TOLERANCE = 2.0  # Default — used when track not in SCORE_TOLERANCES.
+
+# Goldens that sit BELOW a drift floor in the at-car lateral frame (2026-09-28,
+# T-METRIC-LATERAL-ERROR-FRAME). The lookahead frame hid this for months. Each entry
+# names the floors the track breaches; `assert_or_known_floor` turns a breach into a
+# strict xfail: when a fix lifts the track over a listed floor the test FAILS until
+# the floor is removed here — so the list can only shrink deliberately.
+GOLDEN_BELOW_FLOOR: dict[str, dict[str, str]] = {
+    "s_loop": {
+        "traj_yellow": "Trajectory 79.2 < 80 — at-car lateral RMSE 0.345 m on R40 (was 99.1 in the lookahead frame)",
+        "lateral_p95": "at-car lateral P95 0.50 m > 0.40 m gate",
+    },
+    "hairpin_15": {
+        "traj_red": "Trajectory 50.0 < 60 — at-car lateral RMSE 0.60 m / P95 1.19 m on R15 (was 98.7 in the lookahead frame)",
+        "traj_yellow": "Trajectory 50.0 < 80",
+        "lateral_p95": "at-car lateral P95 1.19 m > 0.40 m gate",
+    },
+}
+
+
+def assert_or_known_floor(track_id: str, floor: str, ok: bool, message: str) -> None:
+    """Strict-xfail for a known floor breach on a golden recording.
+
+    ok=True and the floor is listed → fail loudly (the marker must be removed);
+    ok=False and listed → xfail with the recorded reason; otherwise a plain assert.
+    """
+    import pytest as _pytest
+    reason = GOLDEN_BELOW_FLOOR.get(track_id, {}).get(floor)
+    if ok:
+        if reason is not None:
+            _pytest.fail(
+                f"{track_id} now clears the '{floor}' floor — remove it from "
+                f"GOLDEN_BELOW_FLOOR in tests/conftest.py (strict xfail). Was: {reason}"
+            )
+        return
+    if reason is not None:
+        _pytest.xfail(f"[known, T-METRIC-LATERAL-ERROR-FRAME] {track_id}: {reason}")
+    raise AssertionError(message)
 
 # Per-track lateral P95 overrides REMOVED (2026-03-15).
 # Replaced by curvature-adjusted scoring in drive_summary_core.py:

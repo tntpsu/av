@@ -35,6 +35,20 @@ GT_LANE_BOUNDARY_MAX_ABS_M: float = 20.0  # m — GT plausibility bound. Real la
 
 # ── Scoring penalty thresholds ───────────────────────────────────────────────
 CURVATURE_FLOOR_COEFF: float = 3.0      # arc-chord tracking error floor coefficient
+
+# ── Lateral-error frame (T-METRIC-LATERAL-ERROR-FRAME, 2026-09-28) ──────────
+# `control/lateral_error` is ref_x: the lateral offset of the trajectory reference
+# point 3.7–7.2 m AHEAD of the car (= d_at_car + Ld·sin(ψ_err) + ½·Ld²·κ). It is
+# 2–5× the car's real lane error on gentle curves and UNDER-reports it on tight
+# ones (s_loop 0.14 vs 0.34 m, hairpin 0.19 vs 0.63 m at the car). Scoring uses
+# the Unity at-car road-frame cross-track when a recording carries it; set the
+# frame to "lookahead" to restore the pre-2026-09-28 behaviour.
+LATERAL_ERROR_SCORING_FRAME: str = "at_car"   # "at_car" | "lookahead"
+LATERAL_ERROR_AT_CAR_FIELDS: tuple = (
+    "ground_truth/selected_lane_cross_track_road_frame_at_car",  # Unity road frame, +right
+    "control/mpc_gt_cross_track_road_frame_at_car_m",            # same quantity via the MPC path
+)
+LATERAL_ERROR_AT_CAR_MIN_FINITE_FRAC: float = 0.90  # below this the field is "missing"
 STEERING_JERK_PENALTY_CAP: float = 18.0 # norm/s² — penalty applied above this cap
 HEADING_PENALTY_FLOOR_DEG: float = 10.0 # degrees — heading RMSE penalty floor
 

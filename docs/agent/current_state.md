@@ -1,7 +1,33 @@
 # AV Stack — Agent Memory: Current State
 
-**Last updated:** 2026-09-26
+**Last updated:** 2026-09-28
 **Current milestone:** S2-M1 — **5 of 5 tracks still meeting all-layers-≥95 goal.** ACC emergency brake authority restored on G2 (885 → 2 e-stops, 99.8% reduction) via plan `acc-idm-accel-plumbing.md`. Frenet-frame MPC reference remains in shadow-mode.
+
+## 2026-09-28 — Lateral error is now scored AT THE CAR (T-METRIC-LATERAL-ERROR-FRAME)
+
+`control/lateral_error` is ref_x — the reference point's offset 3.7–7.2 m ahead in
+the vehicle frame (`= d_at_car + Ld·sin ψ_err + ½Ld²κ`). It is what every lateral
+score, gate, key issue and A/B in this repo graded until today. Against Unity's at-car
+road-frame cross-track (`ground_truth/selected_lane_cross_track_road_frame_at_car`,
+independently confirmed by the true lane-line fiducials, corr +1.00):
+
+| track | scored (ref_x) RMSE | at-car RMSE | Trajectory then → now (golden) |
+|---|---|---|---|
+| s_loop | 0.116 | **0.345** | 99.1 → **79.0** |
+| hairpin_15 | 0.173 | **0.600** (p95 1.19) | 98.7 → **59.0** |
+| highway_65 | 0.040 | 0.027 | 99.5 → 99.6 |
+| sweeping_highway | 0.127 | 0.093 | 98.3 → 98.7 (Traj 95.4 — passes) |
+| mixed_radius | 0.106 | 0.049 | 98.7 → 99.3 |
+| hill_highway | 0.192 | 0.033 | 97.6 → 99.5 (the "apex residual" was chord sag) |
+
+So the "PP ceiling" story inverts: gentle-curve tracks were fine and over-penalised;
+the tight-curve tracks are genuinely poor and were hidden (the Ld·ψ and chord terms
+cancel the at-car offset there). Scorer switched (`LATERAL_ERROR_SCORING_FRAME`),
+baselines re-frozen on the same goldens, s_loop/hairpin floor breaches are strict
+xfails (`GOLDEN_BELOW_FLOOR`). Live Sep-26: hill_highway at budget 0.05 → Traj 98
+(0.035–0.040 m); at budget 0.08 → Traj 94 (0.10–0.12 m) — the tracking-budget
+question now has a truthful answer. Next: re-register goldens to Sep-26 recordings;
+T-PP-PLANT-MODEL (feedforward on the identified plant) for the tight curves.
 
 ### Session 2026-09-26 (evening) — EQ-bias hunt: four A/Bs, mechanism narrowed to a delivery ceiling
 

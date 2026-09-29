@@ -505,6 +505,87 @@ Step 2 (after a week of numbers): promote to a Trajectory-layer deduction or a
 that is a scoring change → baseline re-freeze per protocol. Until then the
 sweep prints it and must not gate on it.
 
+### T-METRIC-LATERAL-ERROR-FRAME — the scored lateral error is measured 4–7 m ahead of the car (2026-09-28)
+
+`control/lateral_error` = `ref_x` (`pid_controller.py:1301`): the vehicle-frame x of
+the trajectory reference point, which sits at `trajectory/reference_point_y` ≈ 3.7 m
+(curves) to 7.2 m (highway) ahead. That quantity is
+`d_at_car + Ld·sin(heading_error) + ½·Ld²·κ` — the code has known this since April
+(`pid_controller.py:24–35`, Frenet-d for the MPC reference) but the scorer still
+grades the lookahead quantity (`drive_summary_core.py:6005`, penalty
+`min(30, adj_rmse·50)` at 8477). Measured against Unity ground truth at the car
+(`control/mpc_gt_cross_track_at_car_m`, source `road_frame_at_car`), decomposition
+corr 0.97–0.98:
+
+| track (2026-09-26/28) | scored RMSE | at-car RMSE | ratio | Traj penalty now → at-car |
+|---|---|---|---|---|
+| highway_65 | 0.020 | 0.008 | 2.5× | 1.0 → 0.4 |
+| mixed_radius | 0.123 | 0.056 | 2.1× | 6.1 → 2.8 |
+| sweeping_highway | 0.203 | 0.037 | 5.4× | 10.2 → 1.9 |
+| hill_highway | 0.636 | 0.261 | 2.4× | 30 (cap) → 13.1 |
+| s_loop, hairpin_15 | 0.127 / 0.186 | **GT field empty** (source '' 99 %) | — | unverified |
+
+The in-curve "apex cutting +0.13 m" on mixed_radius is +0.06 m at the car; the rest is
+Ld·ψ and chord sag. `CURVATURE_FLOOR_COEFF·|κ|` in the scorer is a proxy patch on
+exactly this ("arc-chord error unavoidable for reactive controllers" — it is
+unavoidable in the *measurement*, not in the tracking). Both `pp_map_ff_wheelbase_m`
+arms show the same at-car offset (+0.064), so months of curve tuning have been
+scored on a quantity the controller cannot drive to zero on a curve.
+
+**Correction (2026-09-28, later the same day):** the "GT field empty on s_loop/hairpin"
+was the MPC path's copy (`control/mpc_gt_cross_track_*`, populated only while that
+branch runs). Unity's own export is on every recording since April under
+`ground_truth/selected_lane_cross_track_road_frame_at_car` — identical where both
+exist (corr +1.0000, max diff 0.0000) and independently confirmed against the true
+lane-line fiducials (`vehicle/right_lane_fiducials_vehicle_true_xy`, nearest point:
+corr +1.00, same RMS on all four tracks checked). With it, s_loop and hairpin_15 flip
+the story: the car is **0.34 m / 0.63 m RMS off centre** there (p95 0.50 / 1.22 m) while
+the scored ref_x said 0.14 / 0.19 — the lookahead frame under-reports tight-curve
+error (the Ld·ψ and chord terms cancel the at-car offset) and over-reports gentle-curve
+error. hill_highway's April golden is 0.033 m at the car (scored 0.192): its "apex
+cutting residual" never existed.
+
+**Done 2026-09-28 (user: "Go"):** `LATERAL_ERROR_SCORING_FRAME = "at_car"` in
+`tools/scoring_registry.py`; `select_lateral_error_frame()` in
+`tools/drive_summary_core.py` swaps `data['lateral_error']` at load time (ref_x sign
+kept) so RMSE/p95, out-of-lane, centered %, apex/late-turn-in classification and the
+0.40 m comfort gate all move together; the arc-chord floor now applies to the lookahead
+fallback only; both frames are reported (`lateral_error_frame`,
+`lateral_error_lookahead_rmse/p95`, `lateral_error_at_car_rmse/p95`);
+`analyze_drive_overall.py` prints both. Baselines re-frozen on the SAME goldens:
+s_loop 99.1→79.0, highway_65 99.5→99.6, hairpin_15 98.7→59.0, sweeping 98.3→98.7,
+mixed 98.7→99.3, hill 97.6→99.5. s_loop/hairpin floor breaches are strict xfails via
+`GOLDEN_BELOW_FLOOR` (tests/conftest.py). Open: re-register goldens to 2026-09-26
+recordings (next commit); fix the tight-curve tracking itself (T-PP-PLANT-MODEL).
+
+
+### T-PP-PLANT-MODEL — Pure Pursuit's feedforward runs on the wrong plant (2026-09-28)
+
+`pid_controller.py:2757`: `δ_ff = pp_map_ff_wheelbase_m (2.5) × κ × gain`, normalised
+by a fixed 30° and multiplied by `max_steering` (0.7); Unity then applies the
+normalised command against a SPEED-DEPENDENT max angle (30° → 16° from 0 to
+12 m/s, `CarController.cs:1398`) and the plant has an understeer gradient
+(sysid April 2026: `L_eff = 3.65 m` at 10 m/s, `K_us = 0.012`, gain 0.684 —
+applied only to the disabled MPC as `mpc_feedforward_wheelbase_m: 3.65`). At
+10 m/s the feedforward delivers ≈ 0.68 × 0.61 × 0.7 ≈ **30 %** of the steering
+the curve needs; the geometric feedback finds the rest reactively → late
+turn-in, apex cutting, the "PP ceiling". Every curve compensator in
+`control.lateral` (209 params) is a patch on this.
+
+**A/B 2026-09-28, mixed_radius, `pp_map_ff_wheelbase_m` 2.5 vs 3.65, 5 pairs:**
+lateral RMSE 0.127 → 0.118 (−7 %), |e| p95 0.250 → 0.223, Trajectory 94.4 →
+94.8, Overall 98.4 → 98.6, 0 e-stops, speed unchanged; key issues unchanged
+(late turn-in C1, apex cutting C2 +0.14). Right direction, small — the
+wheelbase is one of three factors and the phase gate may deliver the FF late.
+
+**Fix (physics-first, no tuning):** `δ_ff = κ · (L + K_us·v²)`, normalised by
+Unity's `max_steer_at_speed(v)` (Lerp 30°→16° over 0–12 m/s; the MPC config
+already carries these as `mpc_max_steer_low/high_speed_rad`), and no ×0.7 on
+the feedforward path (the ceiling is a clip, not a gain). Then verify the FF
+timing (phase gate) against κ_ref at curve entry. Behind a kill-switch, A/B on
+mixed_radius + hill_highway + s_loop. When this lands, expect several
+`control.lateral` compensators to become removable — do that one at a time.
+
 ### T-GOV-TRACKING-BUDGET-SPEED — ego held to 7.0 m/s on R100 by the PP tracking budget (2026-09-24)
 
 The velocity profiler (`av_stack/orchestrator.py` ~1626) plans v(s) with

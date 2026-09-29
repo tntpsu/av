@@ -33,6 +33,7 @@ if str(_TESTS_DIR) not in sys.path:
 from conftest import (
     BASELINE_SCORES,
     COMFORT_GATES,
+    assert_or_known_floor,
     REPO_ROOT,
     SCORE_TOLERANCE,
     SCORE_TOLERANCES,
@@ -132,8 +133,10 @@ class TestScoringRegression:
         for layer in ("perception_score", "trajectory_score", "control_score"):
             label = layer.replace("_score", "").title()
             val = metrics[layer]
-            assert val >= 60.0, (
-                f"{track_id}: {label} layer score {val:.1f} < 60 (red zone)"
+            floor = "traj_red" if layer == "trajectory_score" else f"{layer}_red"
+            assert_or_known_floor(
+                track_id, floor, val >= 60.0,
+                f"{track_id}: {label} layer score {val:.1f} < 60 (red zone)",
             )
 
     def test_trajectory_layer_not_yellow(self, track_id: str) -> None:
@@ -145,8 +148,9 @@ class TestScoringRegression:
         metrics = _extract_metrics(summary)
         traj = metrics["trajectory_score"]
         _regression_results.setdefault(track_id, {})["trajectory_score"] = traj
-        assert traj >= 80.0, (
-            f"{track_id}: Trajectory layer {traj:.1f} < 80 (yellow — cap regression)"
+        assert_or_known_floor(
+            track_id, "traj_yellow", traj >= 80.0,
+            f"{track_id}: Trajectory layer {traj:.1f} < 80 (yellow — cap regression)",
         )
 
     def test_comfort_gates_pass(self, track_id: str) -> None:
