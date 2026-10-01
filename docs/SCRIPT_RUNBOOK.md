@@ -258,6 +258,12 @@ These scripts replay recordings offline and do not require Unity runtime interac
 - **Use when:** `python3 tools/speed_utilization.py <recording.h5>`, or via `analyze_drive_overall.py` (section "SPEED UTILISATION"). Nightly lateral sweep reports the vs-allowed median per track.
 - **Tests:** `tests/test_speed_utilization.py` (synthetic HDF5; eligibility rules, both ratios, attribution).
 
+### `tools/nightly/prune_recordings.py`
+
+- **Purpose:** nightly recording retention (2026-10-01, after `data/recordings` reached 156 GB and the disk 99 %). Deletes `data/recordings/recording_*.h5` that are NOT referenced anywhere in the repo (tests/fixtures, tests, tools, docs, .claude, config, tracks — goldens, ACC references, doc citations), NOT newer than `--keep-days` (14), NOT among the newest `--keep-per-track` (3) per `track_id`, and NOT written in the last 10 min. Dry run by default; `--apply` deletes.
+- **Use when:** called automatically at the end of `tools/nightly/sweep/run.sh` and `tools/nightly/acc-sweep/run.sh`; run by hand with no flags to preview. Prints `RECORDINGS_PRUNE deleted=<n> freed_gb=<x> pool_gb=<y> pool_files=<n> free_gb=<z>` and writes `data/reports/prune/prune_<date>.json`.
+- **Companion:** the same wrappers export `AV_RECORD_CAMERA_STRIDE=22` so nightly recordings keep every 22nd camera image (≈1 Hz at the real ~21.6 Hz). `data/recorder.py` writes zero placeholders in between (gzip → ~1 KB) so `camera/images` stays 1:1 with frames; `camera/image_is_placeholder` / `camera/topdown_image_is_placeholder` flag them and `recording_provenance.camera_stride` records the stride. PhilViz serves the nearest earlier kept image; `replay_perception*.py` / `replay_control_locked.py` refuse strided recordings. The stack itself sees every frame — storage only, no A/B needed. Tests: `tests/test_recording_retention.py`.
+
 ### `tools/analyze/analyze_drive_overall.py`
 
 - **Purpose:** PRIMARY end-to-end drive evaluation tool. Combines path-tracking accuracy, control smoothness, perception quality, trajectory quality, system health, and safety metrics into one comprehensive report.

@@ -3,6 +3,7 @@ Data recorder for AV stack.
 Records camera frames, vehicle state, control commands, and model outputs.
 """
 
+import os
 import h5py
 import numpy as np
 import json
@@ -61,6 +62,17 @@ class DataRecorder:
                 recording_type = "av_stack"  # Default (normal AV stack operation)
         
         self.recording_type = recording_type
+        # Camera stride (2026-10-01): store every Nth front/top-down image, zero
+        # placeholders in between (gzip → ~1 KB each) so camera/images stays 1:1 with
+        # vehicle frames and every index-based consumer keeps working. The stack still
+        # sees every frame — this is storage only. Nightly wrappers export
+        # AV_RECORD_CAMERA_STRIDE=22 (≈1 Hz at the real ~21.6 Hz); default 1 = full rate.
+        try:
+            self.camera_stride = max(1, int(os.environ.get("AV_RECORD_CAMERA_STRIDE", "1") or 1))
+        except ValueError:
+            self.camera_stride = 1
+        self._camera_frames_seen = 0
+        self._topdown_frames_seen = 0
         
         # Initialize HDF5 file
         self.h5_file = h5py.File(self.output_file, 'w')
@@ -112,6 +124,7 @@ class DataRecorder:
                 "analyze_to_failure_default": True,
                 "notes": "",
                 "candidate_label": "unknown",
+                "camera_stride": self.camera_stride,
             },
         }
 
@@ -274,6 +287,13 @@ class DataRecorder:
             maxshape=max_shape,
             dtype=np.int32
         )
+        # 1 where the stored image is a zero placeholder (camera stride, 2026-10-01).
+        self.h5_file.create_dataset(
+            "camera/image_is_placeholder",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.uint8
+        )
         self.h5_file.create_dataset(
             "camera/topdown_images",
             shape=(0, 480, 640, 3),
@@ -295,6 +315,12 @@ class DataRecorder:
             shape=(0,),
             maxshape=max_shape,
             dtype=np.int32
+        )
+        self.h5_file.create_dataset(
+            "camera/topdown_image_is_placeholder",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.uint8
         )
         
         # Vehicle state
@@ -4635,13 +4661,19 @@ class DataRecorder:
             "perception/fit_points_left",
             shape=(0,),
             maxshape=max_shape,
-            dtype=h5py.string_dtype(encoding='utf-8', length=10000)  # Max 10KB per frame
+            dtype=h5py.string_dtype(encoding='utf-8', length=10000),
+            compression="gzip",
+            compression_opts=4,
+            chunks=(64,)  # Max 10KB per frame
         )
         self.h5_file.create_dataset(
             "perception/fit_points_right",
             shape=(0,),
             maxshape=max_shape,
-            dtype=h5py.string_dtype(encoding='utf-8', length=10000)
+            dtype=h5py.string_dtype(encoding='utf-8', length=10000),
+            compression="gzip",
+            compression_opts=4,
+            chunks=(64,)
         )
         self.h5_file.create_dataset(
             "perception/segmentation_mask_png",
@@ -5138,17 +5170,24 @@ class DataRecorder:
         frame_ids = []
         resized_count = 0
         
+        placeholders = []
         for frame in frames:
-            img = frame.camera_frame.image
-            # Resize if needed
-            if img.shape[:2] != (480, 640):
-                resize_start = time.time()
-                img = cv2.resize(img, (640, 480))
-                resized_count += 1
-                resize_duration = time.time() - resize_start
-                if resize_duration > UNITY_TIME_GAP_WARN_SECONDS:
-                    self._debug_print("[RECORDER_CAMERA_RESIZE_SLOW] duration=%.3fs" % resize_duration)
+            keep = (self._camera_frames_seen % self.camera_stride) == 0
+            self._camera_frames_seen += 1
+            if keep:
+                img = frame.camera_frame.image
+                # Resize if needed
+                if img.shape[:2] != (480, 640):
+                    resize_start = time.time()
+                    img = cv2.resize(img, (640, 480))
+                    resized_count += 1
+                    resize_duration = time.time() - resize_start
+                    if resize_duration > UNITY_TIME_GAP_WARN_SECONDS:
+                        self._debug_print("[RECORDER_CAMERA_RESIZE_SLOW] duration=%.3fs" % resize_duration)
+            else:
+                img = np.zeros((480, 640, 3), dtype=np.uint8)
             images.append(img)
+            placeholders.append(0 if keep else 1)
             timestamps.append(frame.camera_frame.timestamp)
             frame_ids.append(frame.camera_frame.frame_id)
 
@@ -5185,6 +5224,7 @@ class DataRecorder:
             self.h5_file["camera/images"].resize((new_size, 480, 640, 3))
             self.h5_file["camera/timestamps"].resize((new_size,))
             self.h5_file["camera/frame_ids"].resize((new_size,))
+            self.h5_file["camera/image_is_placeholder"].resize((new_size,))
             self._debug_print(f"[RECORDER_CAMERA_RESIZE_DS] duration={time.time() - resize_start:.3f}s")
             
             # Write data
@@ -5197,6 +5237,7 @@ class DataRecorder:
             self.h5_file["camera/images"][current_size:] = images
             self.h5_file["camera/timestamps"][current_size:] = timestamps
             self.h5_file["camera/frame_ids"][current_size:] = frame_ids
+            self.h5_file["camera/image_is_placeholder"][current_size:] = np.array(placeholders, dtype=np.uint8)
             self._debug_print(f"[RECORDER_CAMERA_WRITE] duration={time.time() - write_start:.3f}s")
 
     def _write_topdown_camera_frames(self, frames: List[RecordingFrame]):
@@ -5207,16 +5248,23 @@ class DataRecorder:
         frame_ids = []
         resized_count = 0
 
+        placeholders = []
         for frame in frames:
-            img = frame.camera_topdown_frame.image
-            if img.shape[:2] != (480, 640):
-                resize_start = time.time()
-                img = cv2.resize(img, (640, 480))
-                resized_count += 1
-                resize_duration = time.time() - resize_start
-                if resize_duration > UNITY_TIME_GAP_WARN_SECONDS:
-                    self._debug_print("[RECORDER_TOPDOWN_RESIZE_SLOW] duration=%.3fs" % resize_duration)
+            keep = (self._topdown_frames_seen % self.camera_stride) == 0
+            self._topdown_frames_seen += 1
+            if keep:
+                img = frame.camera_topdown_frame.image
+                if img.shape[:2] != (480, 640):
+                    resize_start = time.time()
+                    img = cv2.resize(img, (640, 480))
+                    resized_count += 1
+                    resize_duration = time.time() - resize_start
+                    if resize_duration > UNITY_TIME_GAP_WARN_SECONDS:
+                        self._debug_print("[RECORDER_TOPDOWN_RESIZE_SLOW] duration=%.3fs" % resize_duration)
+            else:
+                img = np.zeros((480, 640, 3), dtype=np.uint8)
             images.append(img)
+            placeholders.append(0 if keep else 1)
             timestamps.append(frame.camera_topdown_frame.timestamp)
             frame_ids.append(frame.camera_topdown_frame.frame_id)
 
@@ -5239,6 +5287,7 @@ class DataRecorder:
             self.h5_file["camera/topdown_images"].resize((new_size, 480, 640, 3))
             self.h5_file["camera/topdown_timestamps"].resize((new_size,))
             self.h5_file["camera/topdown_frame_ids"].resize((new_size,))
+            self.h5_file["camera/topdown_image_is_placeholder"].resize((new_size,))
             self._debug_print(f"[RECORDER_TOPDOWN_RESIZE_DS] duration={time.time() - resize_start:.3f}s")
 
             write_start = time.time()
@@ -5250,6 +5299,7 @@ class DataRecorder:
             self.h5_file["camera/topdown_images"][current_size:] = images
             self.h5_file["camera/topdown_timestamps"][current_size:] = timestamps
             self.h5_file["camera/topdown_frame_ids"][current_size:] = frame_ids
+            self.h5_file["camera/topdown_image_is_placeholder"][current_size:] = np.array(placeholders, dtype=np.uint8)
             self._debug_print(f"[RECORDER_TOPDOWN_WRITE] duration={time.time() - write_start:.3f}s")
     
     def _write_vehicle_states(self, frames: List[RecordingFrame]):

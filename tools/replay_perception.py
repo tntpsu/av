@@ -34,6 +34,17 @@ from data.recorder import DataRecorder
 from data.formats.data_format import CameraFrame, VehicleState, ControlCommand
 
 
+
+def _refuse_camera_strided(f, path) -> None:
+    """Camera-strided recordings (nightly sweeps, AV_RECORD_CAMERA_STRIDE) hold zero
+    placeholders in camera/images; perception replay on them is meaningless."""
+    key = "camera/image_is_placeholder"
+    if key in f and len(f[key]) and int(f[key][:].max()) == 1:
+        raise SystemExit(
+            f"{path}: camera-strided recording (placeholders present) — replay needs a "
+            "full-rate recording; re-record with AV_RECORD_CAMERA_STRIDE=1 (a /diagnose run)."
+        )
+
 def replay_perception(
     input_recording: str,
     output_name: str = None,
@@ -53,6 +64,7 @@ def replay_perception(
     
     # Load existing recording
     with h5py.File(input_recording, 'r') as f:
+        _refuse_camera_strided(f, input_recording)
         num_frames = len(f["camera/images"])
         print(f"Found {num_frames} frames")
         

@@ -177,6 +177,11 @@ PYEOF
   fi
   echo
 
+  # Storage (2026-10-01): nightly recordings store every 22nd camera image (≈1 Hz at
+  # the real ~21.6 Hz; zero placeholders keep camera/images 1:1 with frames). The stack
+  # still sees every frame. Full-rate recording is for /diagnose runs, not sweeps.
+  export AV_RECORD_CAMERA_STRIDE=22
+
   echo "--- claude -p (model=sonnet-5, budget=\$10, max=${CLAUDE_TIMEOUT}s) ---"
   # MCP servers disabled per launchd-OAuth-hang fix.
   # caffeinate -di prevents macOS idle/display sleep during the run; covers
@@ -208,6 +213,11 @@ PYEOF
   EXIT=$?
   kill "$WATCHDOG_PID" 2>/dev/null
   wait "$WATCHDOG_PID" 2>/dev/null
+  echo
+
+  echo "--- recordings retention (keep: referenced, <14 d, newest 3/track) ---"
+  python3 tools/nightly/prune_recordings.py --apply --keep-days 14 --keep-per-track 3 \
+    || echo "prune_recordings.py failed (continuing)"
   echo
 
   echo "=== acc-sweep run end exit=$EXIT $(date -Iseconds) ==="

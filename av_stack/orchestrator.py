@@ -1187,6 +1187,7 @@ class AVStack:
                 "analyze_to_failure_default": True,
                 "notes": "",
                 "candidate_label": candidate_label,
+                "camera_stride": int(getattr(self.recorder, "camera_stride", 1)),
             }
             # Cadence / bridge — verify after run via tools/analyze/verify_recording_run.py
             self.recorder.metadata["stack_transport"] = {

@@ -44,6 +44,17 @@ _POLY_DEGREE = 2
 _COEFFS_PER_LANE = _POLY_DEGREE + 1  # 3
 
 
+
+def _refuse_camera_strided(f, path) -> None:
+    """Camera-strided recordings (nightly sweeps, AV_RECORD_CAMERA_STRIDE) hold zero
+    placeholders in camera/images; perception replay on them is meaningless."""
+    key = "camera/image_is_placeholder"
+    if key in f and len(f[key]) and int(f[key][:].max()) == 1:
+        raise SystemExit(
+            f"{path}: camera-strided recording (placeholders present) — replay needs a "
+            "full-rate recording; re-record with AV_RECORD_CAMERA_STRIDE=1 (a /diagnose run)."
+        )
+
 def _pick_latest_recording() -> Path:
     recordings = sorted(
         (REPO_ROOT / "data" / "recordings").glob("*.h5"),
@@ -319,6 +330,7 @@ def replay_perception_locked(
         output_name = f"perception_locked_{input_recording.stem}"
 
     with h5py.File(input_recording, "r") as in_f, h5py.File(lock_recording, "r") as lock_f:
+        _refuse_camera_strided(in_f, input_recording)
         n_input = _get_len(in_f, "camera/images")
         n_lock = _get_len(lock_f, "perception/confidence")
         if n_input == 0:

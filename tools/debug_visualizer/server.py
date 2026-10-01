@@ -243,6 +243,22 @@ def _read_json_file(path: Path) -> dict:
         return {}
 
 
+
+def _nearest_kept_index(f, dataset: str, frame_index: int) -> int:
+    """Camera-strided recordings (AV_RECORD_CAMERA_STRIDE, 2026-10-01) store zero
+    placeholders between kept images; return the nearest earlier kept index."""
+    flag_key = {
+        "camera/images": "camera/image_is_placeholder",
+        "camera/topdown_images": "camera/topdown_image_is_placeholder",
+    }.get(dataset)
+    if not flag_key or flag_key not in f or frame_index >= len(f[flag_key]):
+        return frame_index
+    flags = f[flag_key]
+    idx = frame_index
+    while idx > 0 and int(flags[idx]) == 1:
+        idx -= 1
+    return idx
+
 @app.route('/api/recordings')
 def list_recordings():
     """List all available HDF5 recordings."""
@@ -2497,11 +2513,11 @@ def get_frame_image(filename, frame_index):
             if use_topdown:
                 if 'camera/topdown_images' not in f or frame_index >= len(f['camera/topdown_images']):
                     return jsonify({"error": "Frame not found"}), 404
-                image = f['camera/topdown_images'][frame_index]
+                image = f['camera/topdown_images'][_nearest_kept_index(f, 'camera/topdown_images', frame_index)]
             else:
                 if 'camera/images' not in f or frame_index >= len(f['camera/images']):
                     return jsonify({"error": "Frame not found"}), 404
-                image = f['camera/images'][frame_index]
+                image = f['camera/images'][_nearest_kept_index(f, 'camera/images', frame_index)]
             # Convert to PIL Image
             img = Image.fromarray(image)
             
@@ -2565,7 +2581,7 @@ def generate_debug_overlays(filename, frame_index):
                 return jsonify({"error": "Frame not found"}), 404
             
             # Load image
-            image = f['camera/images'][frame_index]
+            image = f['camera/images'][_nearest_kept_index(f, 'camera/images', frame_index)]
             
             # Re-run perception to get debug images AND fit_points
             detector = SimpleLaneDetector()
@@ -2704,7 +2720,7 @@ def get_polynomial_analysis(filename, frame_index):
                 return jsonify({"error": "Frame not found"}), 404
             
             # Load image
-            image = f['camera/images'][frame_index]
+            image = f['camera/images'][_nearest_kept_index(f, 'camera/images', frame_index)]
             
             # Load what was actually recorded in the original run
             recorded_data = {}
