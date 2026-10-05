@@ -47,15 +47,15 @@ COMFORT_GATES: dict[str, float] = _REGISTRY_COMFORT_GATES
 # 2026-04-17: re-baselined after q_lat=1.0 revert (commit 535724d) for 4 tracks.
 # 2026-04-18: hairpin_15 re-baselined after PP recovery term landed (replaces orchestrator post-limiter multiplier).
 BASELINE_SCORES: dict[str, float] = {
-    # 2026-09-28: goldens re-registered to the 2026-09-26/28 daytime sweep and scored in the at-car
-    # lateral frame (T-METRIC-LATERAL-ERROR-FRAME). April-golden values in the trailing comments
-    # (at-car frame / lookahead frame). s_loop and hairpin_15 are truthful: 0.35 / 0.59 m RMS off centre.
-    "s_loop":           79.0,   # April golden: 79.0 at-car / 99.1 lookahead
-    "highway_65":       99.6,   # 99.6 / 99.5
-    "hairpin_15":       59.0,   # 59.0 / 98.7
-    "sweeping_highway": 98.6,   # 98.7 / 98.3 (Aug-13 golden)
-    "mixed_radius":     99.1,   # 99.3 / 98.7
-    "hill_highway":     99.5,   # 99.5 / 97.6
+    # 2026-10-05: re-frozen after the scoring time base moved to vehicle/unity_time (the recorded
+    # clock was a synthetic 1/13 s counter running ~2x fast). Control layer drops on curved tracks
+    # because steering jerk is now measured in real seconds. 2026-09-28 values in trailing comments.
+    "s_loop":           79.0,   # was 79.0
+    "highway_65":       99.5,   # was 99.6
+    "hairpin_15":       59.0,   # was 59.0
+    "sweeping_highway": 95.7,   # was 98.6
+    "mixed_radius":     95.7,   # was 99.1
+    "hill_highway":     96.6,   # was 99.5
 }
 
 # Per-track score tolerances (default 2.0). Wider for tracks with structural variance.

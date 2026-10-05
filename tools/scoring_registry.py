@@ -49,6 +49,18 @@ LATERAL_ERROR_AT_CAR_FIELDS: tuple = (
     "control/mpc_gt_cross_track_road_frame_at_car_m",            # same quantity via the MPC path
 )
 LATERAL_ERROR_AT_CAR_MIN_FINITE_FRAC: float = 0.90  # below this the field is "missing"
+
+# ── Scoring time base (T-CLOCK-SYNTHETIC-CAPTURE-TIMESTAMP, 2026-10-05) ─────────
+# `vehicle/timestamps` (= camera/control timestamps) was Unity CameraCapture's synthetic
+# captureClock — +1/13 s per capture whatever the real interval — and ran 1.7–2.0× faster
+# than Unity time on every recording since April. All dt-derived metrics (accel, jerk,
+# steering rate, cadence) were under-reported by that ratio (jerk by ratio²). Scoring now
+# uses Unity sim time when the recording carries it; "recorded" restores the old behaviour.
+TIME_BASE_SCORING: str = "unity_time"   # "unity_time" | "recorded"
+TIME_BASE_FIELDS: tuple = (
+    "vehicle/unity_time",                   # Unity Time.time at the vehicle-state sample (sim clock)
+    "vehicle/stream_front_last_realtime_s", # Time.realtimeSinceStartup at camera receive (wall clock)
+)
 STEERING_JERK_PENALTY_CAP: float = 18.0 # norm/s² — penalty applied above this cap
 HEADING_PENALTY_FLOOR_DEG: float = 10.0 # degrees — heading RMSE penalty floor
 

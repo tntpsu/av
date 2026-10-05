@@ -165,6 +165,24 @@ Verified cost: the acc-sweep job did exactly this on four consecutive nights
 (2026-09-05 through -08), losing every lesson at `exit=0`. See memory
 `feedback_nightly_retro_proposes_into_void`.
 
+## Scoring changes on 2026-09-28 / 2026-10-05 — read before comparing against earlier nights
+
+1. **Lateral error is scored AT THE CAR since 2026-09-28** (`scoring_registry.LATERAL_ERROR_SCORING_FRAME`).
+   Before that every lateral RMSE/P95 was `control/lateral_error` = ref_x, the reference point's offset
+   3.7–7.2 m ahead; it over-reported gentle curves 2–5× and UNDER-reported tight ones. Consequences you
+   must not report as regressions: s_loop Trajectory ≈ 79 (at-car RMSE ≈ 0.35 m) and hairpin_15 ≈ 50–59
+   (≈ 0.6 m) are the TRUE standing values (strict xfails in `tests/conftest.py::GOLDEN_BELOW_FLOOR`);
+   hill_highway/sweeping_highway/mixed_radius Trajectory went UP (98 / 95 / 97). Baselines in
+   `tests/fixtures/scoring_baselines.json` were re-frozen on 2026-09-28 (Sep-26/28 goldens). Never put a
+   pre-09-28 lateral number next to a post-09-28 one without saying which frame it is in.
+2. **`CLOCK AUDIT` lines in analyze output are expected (report-only).** `vehicle/timestamps` was a synthetic
+   1/13 s counter running 1.7–2.0× faster than `vehicle/unity_time`; `compute_clock_audit` prints both.
+   From 2026-10-05 the scorer's time base is `vehicle/unity_time` (`TIME_BASE_SCORING`), so accel/jerk
+   P95 are ~2× / ~3.5× larger than earlier nights — a measurement correction, not a regression. Comfort
+   baselines were re-frozen the same day; comfort-gate breaches on goldens are listed in `GOLDEN_BELOW_FLOOR`.
+3. **`RECORDINGS_PRUNE deleted=…` and 45 MB recordings are expected** (nightly retention + camera stride 22,
+   2026-10-01). A recording with `camera/image_is_placeholder` set is normal for sweeps.
+
 ## What NOT to do
 
 - **Do not append a new dated section to `project_sweep_trajectory_flags.md`

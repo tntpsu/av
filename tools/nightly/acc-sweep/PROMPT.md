@@ -269,6 +269,17 @@ lessons were lost — including three factual corrections to
 `reference_hdf5_acc_schema_gaps.md`, which stayed wrong in the meantime. See
 memory `feedback_nightly_retro_proposes_into_void`.
 
+## Scoring changes on 2026-09-28 / 2026-10-05 — lateral frame, time base, storage
+
+- Lateral error is scored at the car (ref_x 3.7–7.2 m ahead was the old quantity); see the lateral sweep
+  PROMPT for the full note. ACC scenarios: Trajectory sub-scores can move either way vs pre-09-28 nights.
+- From 2026-10-05 the scorer's time base is `vehicle/unity_time`; the old `vehicle/timestamps` was a
+  synthetic 1/13 s counter running ~2× fast, so every dt-derived ACC metric (accel/jerk P95, sign-flip
+  rate, post-convergence timing) reads ~2× (jerk ~3.5×) larger than before. `CLOCK AUDIT` lines are
+  report-only and expected. Do not call this a regression; compare only against nights ≥ 2026-10-05 or
+  against re-scored older recordings (the scorer is era-aware: it uses unity_time whenever present).
+- `RECORDINGS_PRUNE` lines and 45 MB camera-strided recordings are normal (retention + stride, 2026-10-01).
+
 ## What NOT to do
 
 - **Do not append a new dated entry to `project_acc_sweep_baseline.md` when the

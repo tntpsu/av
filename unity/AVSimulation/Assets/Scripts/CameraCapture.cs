@@ -668,7 +668,12 @@ public class CameraCapture : MonoBehaviour
                 captureClock = captureTime;
             }
         }
-        captureTime = (float)captureClock;
+        // 2026-10-05 (T-CLOCK-SYNTHETIC-CAPTURE-TIMESTAMP): the frame timestamp is REAL time.
+        // Until now this line substituted captureClock — a counter advancing 1/targetFPS per
+        // capture regardless of the actual interval — so every recorded timestamp ran
+        // ~1.7–2.0x faster than Time.time (captures arrive at ~21.6 Hz, not targetFPS=13).
+        // captureClock is kept only for the drift warning above; the monotonic guard on
+        // captureTime (lastCaptureUnityTime + fallbackDelta) still protects the pipeline.
         if (lastCaptureUnityTime > 0f)
         {
             float timeGap = captureTime - lastCaptureUnityTime;

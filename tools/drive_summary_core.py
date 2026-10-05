@@ -50,6 +50,8 @@ from scoring_registry import (
     LATERAL_ERROR_SCORING_FRAME,
     LATERAL_ERROR_AT_CAR_FIELDS,
     LATERAL_ERROR_AT_CAR_MIN_FINITE_FRAC,
+    TIME_BASE_SCORING,
+    TIME_BASE_FIELDS,
     STEERING_JERK_PENALTY_CAP,
     HEADING_PENALTY_FLOOR_DEG,
     ACC_COLLISION_GATE,
@@ -5346,6 +5348,37 @@ def _compute_grade_metrics(data: Dict, n_frames: int) -> Optional[Dict]:
 
 
 
+def select_time_base(f, recorded, mode: str = TIME_BASE_SCORING) -> Dict:
+    """Pick the clock the scorer differentiates against (T-CLOCK-SYNTHETIC-CAPTURE-TIMESTAMP).
+
+    `recorded` is `vehicle/timestamps` — the synthetic capture counter until 2026-10-05.
+    Returns Unity sim time (or the wall clock) when the recording has it, is the same
+    length, strictly increasing and spans > 1 s; otherwise the recorded array. Era-aware:
+    every recording since April 2026 carries `vehicle/unity_time`.
+    """
+    out = {"timestamps": recorded, "time_base": "recorded", "time_base_field": None,
+           "recorded_over_base_ratio": None}
+    if mode != "unity_time" or recorded is None or len(recorded) < 3:
+        return out
+    n = len(recorded)
+    for key in TIME_BASE_FIELDS:
+        if key not in f:
+            continue
+        a = np.asarray(f[key][:], dtype=float)
+        if a.ndim != 1 or a.size < n:
+            continue
+        a = a[:n]
+        d = np.diff(a)
+        if not np.all(np.isfinite(a)) or np.any(d <= 0) or (a[-1] - a[0]) <= 1.0:
+            continue
+        rec_span = float(recorded[-1] - recorded[0])
+        out.update({"timestamps": a, "time_base": "unity_time" if key.endswith("unity_time") else "realtime",
+                    "time_base_field": key,
+                    "recorded_over_base_ratio": (rec_span / float(a[-1] - a[0])) if rec_span > 0 else None})
+        return out
+    return out
+
+
 def compute_clock_audit(f) -> Optional[Dict]:
     """Report-only (2026-09-29, T-CLOCK-SYNTHETIC-CAPTURE-TIMESTAMP).
 
@@ -5465,6 +5498,12 @@ def analyze_recording_summary(
                 )
             elif 'vehicle/timestamps' in f:
                 data['timestamps'] = np.array(f['vehicle/timestamps'][:])
+                _tb = select_time_base(f, data['timestamps'])
+                data['timestamps_recorded'] = data['timestamps']
+                data['timestamps'] = _tb['timestamps']
+                data['time_base'] = _tb['time_base']
+                data['time_base_field'] = _tb['time_base_field']
+                data['recorded_over_base_ratio'] = _tb['recorded_over_base_ratio']
                 data['speed'] = np.array(f['vehicle/speed'][:]) if 'vehicle/speed' in f else None
                 data['speed_limit'] = (
                     np.array(f['vehicle/speed_limit'][:]) if 'vehicle/speed_limit' in f else None
@@ -11329,6 +11368,9 @@ def analyze_recording_summary(
             },
         },
         "clock_audit": data.get('clock_audit'),
+        "time_base": data.get('time_base', 'recorded'),
+        "time_base_field": data.get('time_base_field'),
+        "recorded_over_base_ratio": data.get('recorded_over_base_ratio'),
         "path_tracking": {
             "lateral_error_rmse": safe_float(lateral_error_rmse),
             "lateral_error_mean": safe_float(lateral_error_mean),

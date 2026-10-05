@@ -36,7 +36,7 @@ project_root = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(project_root))
 
 from trajectory.utils import smooth_curvature_distance
-from tools.drive_summary_core import analyze_recording_summary, select_lateral_error_frame
+from tools.drive_summary_core import analyze_recording_summary, select_lateral_error_frame, select_time_base
 
 
 @dataclass
@@ -169,6 +169,10 @@ class DriveAnalyzer:
                     )
                 elif 'vehicle/timestamps' in f:
                     self.data['timestamps'] = np.array(f['vehicle/timestamps'][:])
+                    _tb = select_time_base(f, self.data['timestamps'])
+                    self.data['timestamps_recorded'] = self.data['timestamps']
+                    self.data['timestamps'] = _tb['timestamps']
+                    self.data['time_base'] = _tb['time_base']
                     self.data['position'] = np.array(f['vehicle/position'][:]) if 'vehicle/position' in f else None
                     self.data['speed'] = np.array(f['vehicle/speed'][:]) if 'vehicle/speed' in f else None
                     self.data['speed_limit'] = (
@@ -1257,6 +1261,7 @@ def _print_summary_report(recording_path: Path, summary: Dict, analyze_to_failur
     print("2. PATH TRACKING PERFORMANCE")
     print("-" * 80)
     print(f"   Lateral Error RMSE: {path_tracking.get('lateral_error_rmse', 0.0):.4f} m  [{path_tracking.get('lateral_error_frame', 'lookahead')} frame; lookahead ref_x RMSE {path_tracking.get('lateral_error_lookahead_rmse') or 0.0:.4f} m]")
+    print(f"   Time base for all rates: {summary.get('time_base', 'recorded')} ({summary.get('time_base_field') or 'vehicle/timestamps'}); recorded/base clock ratio {summary.get('recorded_over_base_ratio') or 1.0:.2f}")
     _ca = summary.get("clock_audit") if isinstance(summary, dict) else None
     if _ca:
         print(f"   CLOCK AUDIT (report-only, T-CLOCK-SYNTHETIC-CAPTURE-TIMESTAMP): recorded clock spans {_ca['recorded_span_s']:.1f} s vs Unity time {_ca['unity_time_span_s']:.1f} s "

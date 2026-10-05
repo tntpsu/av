@@ -534,7 +534,25 @@ Done tonight: `compute_clock_audit()` in `drive_summary_core.py` — report-only
 (`clock_audit` in the summary, CLOCK AUDIT lines in `analyze_drive_overall.py`). Scoring
 unchanged.
 
-Fix plan (user decision — each step moves every baseline / time constant):
+**Confirmed with a stopwatch 2026-10-05 00:21:** a `--duration 60` run took 94.7 s wall
+including startup/shutdown; the recorded clock spanned 117.0 s (impossible for a real
+clock), `vehicle/unity_time` 59.9 s, `realtimeSinceStartup` 59.8 s.
+
+**Done 2026-10-05 (user: "Go"):** (a) `CameraCapture.cs` no longer substitutes
+`captureClock` for the frame timestamp — real `Time.unscaledTime` (fixedTime in GT-sync)
+is sent, monotonic guard kept, drift warning kept; the orchestrator's `control_dt` becomes
+real automatically. (b) Scorer time base → `vehicle/unity_time` (`TIME_BASE_SCORING`,
+`select_time_base()`; era-aware; summary carries `time_base`, `recorded_over_base_ratio`).
+On the Sep-26/28 goldens the ratio is 1.94–2.02; accel P95 ≈ ×2, commanded jerk ≈ ×1.9
+(comfort gates still pass) and **Control falls to 76–80 on every curved track** — steering
+jerk in real seconds is ~4× the recorded value and exceeds `pp_max_steering_jerk` (18),
+which the limiter had been enforcing in fake seconds. Interim baselines re-frozen; a second
+re-freeze follows the first sweep on the real-time player (same night). Open follow-ups:
+`tests/acc_closedloop_harness.py` `FRAME_DT_MEASURED_S = 0.0769` → re-measure (real ≈ 0.046;
+T-ACC-HARNESS-REAL-DT); `stack.target_loop_hz: 13.0`; re-validate every time-based limiter by
+A/B now that dt is real.
+
+Fix plan (as executed; each step moves every baseline / time constant):
 1. Unity: send `Time.unscaledTime` (or `fixedTime` in GT-sync) as the frame timestamp; keep
    the monotonic guard, drop the synthetic advance. Python fallback: orchestrator
    `control_dt` from `unityTime` deltas (already in the state dict) with the 10–250 ms clamp.

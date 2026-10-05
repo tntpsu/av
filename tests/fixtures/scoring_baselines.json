@@ -1,7 +1,7 @@
 {
   "schema_version": "1",
-  "description": "Frozen per-track metric baselines for scoring regression detection. 2026-09-28: goldens re-registered to the 2026-09-26/28 daytime sweep recordings (first fresh lateral runs since April) and scored in the at-car lateral frame (T-METRIC-LATERAL-ERROR-FRAME). Same-day intermediate (April goldens, at-car frame): s_loop 79.0/0.345, highway_65 99.6/0.027, hairpin_15 59.0/0.600, sweeping_highway 98.7/0.093, mixed_radius 99.3/0.049, hill_highway 99.5/0.033 (overall / adj_rmse). Lookahead-frame April values: s_loop 99.1/0.067, highway_65 99.5/0.038, hairpin_15 98.7/0.097, sweeping_highway 98.3/0.247, mixed_radius 98.7/0.095, hill_highway 97.6/0.171.",
-  "frozen_at": "2026-09-28",
+  "description": "Frozen per-track metric baselines for scoring regression detection. 2026-10-05: re-frozen on the 2026-09-26/28 goldens after the scoring TIME BASE moved from vehicle/timestamps (a synthetic 1/13 s counter running 1.94-2.02x faster than Unity time) to vehicle/unity_time (T-CLOCK-SYNTHETIC-CAPTURE-TIMESTAMP). accel_p95_filtered ~x2 and commanded_jerk_p95 ~x1.9 vs the 2026-09-28 values; Control layer falls to 76-80 on curved tracks because steering jerk in real seconds exceeds the pp_max_steering_jerk cap that the limiter had been enforcing in fake seconds. 2026-09-28 (recorded clock) values: s_loop 79.0/0.704/1.084, highway_65 99.6/0.569/0.624, hairpin_15 59.0/0.806/1.560, sweeping_highway 98.6/0.571/0.624, mixed_radius 99.1/0.633/0.624, hill_highway 99.5/0.898/0.780 (overall/accel/jerk). Expect another re-freeze once the Unity player sends real timestamps (CameraCapture.cs, same day) and the limiters act in real time.",
+  "frozen_at": "2026-10-05",
   "tolerances": {
     "overall_score": 2.0,
     "lateral_error_adj_rmse": 0.03,
@@ -14,43 +14,43 @@
       "overall_score": 79.0,
       "lateral_error_adj_rmse": 0.348,
       "lateral_error_adj_p95": 0.5,
-      "accel_p95_filtered": 0.704,
-      "commanded_jerk_p95": 1.084
+      "accel_p95_filtered": 1.357,
+      "commanded_jerk_p95": 2.038
     },
     "highway_65": {
-      "overall_score": 99.6,
+      "overall_score": 99.5,
       "lateral_error_adj_rmse": 0.031,
       "lateral_error_adj_p95": 0.093,
-      "accel_p95_filtered": 0.569,
-      "commanded_jerk_p95": 0.624
+      "accel_p95_filtered": 1.217,
+      "commanded_jerk_p95": 0.97
     },
     "hairpin_15": {
       "overall_score": 59.0,
       "lateral_error_adj_rmse": 0.594,
       "lateral_error_adj_p95": 1.216,
-      "accel_p95_filtered": 0.806,
-      "commanded_jerk_p95": 1.56
+      "accel_p95_filtered": 1.452,
+      "commanded_jerk_p95": 2.994
     },
     "sweeping_highway": {
-      "overall_score": 98.6,
+      "overall_score": 95.7,
       "lateral_error_adj_rmse": 0.099,
       "lateral_error_adj_p95": 0.186,
-      "accel_p95_filtered": 0.571,
-      "commanded_jerk_p95": 0.624
+      "accel_p95_filtered": 1.194,
+      "commanded_jerk_p95": 1.016
     },
     "mixed_radius": {
-      "overall_score": 99.1,
+      "overall_score": 95.7,
       "lateral_error_adj_rmse": 0.062,
       "lateral_error_adj_p95": 0.118,
-      "accel_p95_filtered": 0.633,
-      "commanded_jerk_p95": 0.624
+      "accel_p95_filtered": 1.295,
+      "commanded_jerk_p95": 1.29
     },
     "hill_highway": {
-      "overall_score": 99.5,
+      "overall_score": 96.6,
       "lateral_error_adj_rmse": 0.035,
       "lateral_error_adj_p95": 0.071,
-      "accel_p95_filtered": 0.898,
-      "commanded_jerk_p95": 0.78
+      "accel_p95_filtered": 1.675,
+      "commanded_jerk_p95": 1.506
     }
   }
 }
