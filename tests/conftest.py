@@ -47,15 +47,15 @@ COMFORT_GATES: dict[str, float] = _REGISTRY_COMFORT_GATES
 # 2026-04-17: re-baselined after q_lat=1.0 revert (commit 535724d) for 4 tracks.
 # 2026-04-18: hairpin_15 re-baselined after PP recovery term landed (replaces orchestrator post-limiter multiplier).
 BASELINE_SCORES: dict[str, float] = {
-    # 2026-10-05: re-frozen after the scoring time base moved to vehicle/unity_time (the recorded
-    # clock was a synthetic 1/13 s counter running ~2x fast). Control layer drops on curved tracks
-    # because steering jerk is now measured in real seconds. 2026-09-28 values in trailing comments.
-    "s_loop":           79.0,   # was 79.0
-    "highway_65":       99.5,   # was 99.6
-    "hairpin_15":       59.0,   # was 59.0
-    "sweeping_highway": 95.7,   # was 98.6
-    "mixed_radius":     95.7,   # was 99.1
-    "hill_highway":     96.6,   # was 99.5
+    # 2026-10-05 FINAL: goldens = first sweep on the real-time Unity player (clock ratio 1.00), scored
+    # at the car; comfort metrics in real seconds. s_loop / hairpin_15 are truthful tight-curve values
+    # (GOLDEN_BELOW_FLOOR). Pre-10-05 numbers are not comparable (synthetic 1/13 s clock).
+    "s_loop":           79.0,
+    "highway_65":       99.6,
+    "hairpin_15":       59.0,
+    "sweeping_highway": 98.3,
+    "mixed_radius":     99.2,
+    "hill_highway":     99.5,
 }
 
 # Per-track score tolerances (default 2.0). Wider for tracks with structural variance.
@@ -76,12 +76,12 @@ SCORE_TOLERANCE = 2.0  # Default — used when track not in SCORE_TOLERANCES.
 # the floor is removed here — so the list can only shrink deliberately.
 GOLDEN_BELOW_FLOOR: dict[str, dict[str, str]] = {
     "s_loop": {
-        "traj_yellow": "Trajectory 79.1 < 80 — at-car lateral RMSE 0.348 m on R40 (99.1 in the lookahead frame)",
+        "traj_yellow": "Trajectory 79.6 < 80 — at-car lateral RMSE 0.343 m on R40 (99.1 in the lookahead frame)",
         "lateral_p95": "at-car lateral P95 0.50 m > 0.40 m gate",
     },
     "hairpin_15": {
-        "traj_red": "Trajectory 50.3 < 60 — at-car lateral RMSE 0.59 m / P95 1.22 m on R15 (98.7 in the lookahead frame)",
-        "traj_yellow": "Trajectory 50.3 < 80",
+        "traj_red": "Trajectory 51.1 < 60 — at-car lateral RMSE 0.58 m / P95 1.2 m on R15 (98.7 in the lookahead frame)",
+        "traj_yellow": "Trajectory 51.1 < 80",
         "lateral_p95": "at-car lateral P95 1.22 m > 0.40 m gate",
     },
 }

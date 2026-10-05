@@ -1,7 +1,22 @@
 # AV Stack — Agent Memory: Current State
 
-**Last updated:** 2026-09-29
+**Last updated:** 2026-10-05
 **Current milestone:** S2-M1 — **5 of 5 tracks still meeting all-layers-≥95 goal.** ACC emergency brake authority restored on G2 (885 → 2 e-stops, 99.8% reduction) via plan `acc-idm-accel-plumbing.md`. Frenet-frame MPC reference remains in shadow-mode.
+
+## 2026-10-05 — Clock fixed; goldens on the real-time player; first honest comfort numbers
+
+Stopwatch-confirmed (60 s run: 94.7 s wall incl. startup, recorded span 117.0 s, unity_time
+59.9 s), then fixed: `CameraCapture.cs` sends real time, scorer time base verified against
+`vehicle/unity_time` (8d55428 + follow-up). First sweep on the new player: clock ratio 1.00 on
+all six tracks, 0 e-stops. Final baselines s_loop 79.0 / highway_65 99.6 / hairpin_15 59.0 /
+sweeping_highway 98.3 / mixed_radius 99.2 / hill_highway 99.5 — at-car lateral frame, real
+seconds. accel P95 1.0–1.8 m/s², commanded jerk 1.4–3.6 m/s³, steering jerk exactly at the
+18 cap (limiter verified in real time). Lesson recorded: differentiating against the 20 Hz
+vehicle-state stamp produced a false "Control 76–80 / limiter 4× over cap" for one hour.
+Also this week: 109 GB of recordings pruned + nightly retention + camera stride 22
+(146 → 45 MB/run); 85 GB of stale Ollama models removed; disk 7 → 194 GB free.
+Next: T-ACC-HARNESS-REAL-DT; re-base the lateral loop on the at-car error (s_loop/hairpin
+0.34 / 0.58 m RMS are the real problem).
 
 ## 2026-09-29 — P0: the recorded clock is not a clock (T-CLOCK-SYNTHETIC-CAPTURE-TIMESTAMP)
 

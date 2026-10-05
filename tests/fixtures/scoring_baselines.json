@@ -1,6 +1,6 @@
 {
   "schema_version": "1",
-  "description": "Frozen per-track metric baselines for scoring regression detection. 2026-10-05: re-frozen on the 2026-09-26/28 goldens after the scoring TIME BASE moved from vehicle/timestamps (a synthetic 1/13 s counter running 1.94-2.02x faster than Unity time) to vehicle/unity_time (T-CLOCK-SYNTHETIC-CAPTURE-TIMESTAMP). accel_p95_filtered ~x2 and commanded_jerk_p95 ~x1.9 vs the 2026-09-28 values; Control layer falls to 76-80 on curved tracks because steering jerk in real seconds exceeds the pp_max_steering_jerk cap that the limiter had been enforcing in fake seconds. 2026-09-28 (recorded clock) values: s_loop 79.0/0.704/1.084, highway_65 99.6/0.569/0.624, hairpin_15 59.0/0.806/1.560, sweeping_highway 98.6/0.571/0.624, mixed_radius 99.1/0.633/0.624, hill_highway 99.5/0.898/0.780 (overall/accel/jerk). Expect another re-freeze once the Unity player sends real timestamps (CameraCapture.cs, same day) and the limiters act in real time.",
+  "description": "Frozen per-track metric baselines for scoring regression detection. 2026-10-05 FINAL: goldens = first sweep on the real-time Unity player (recording_20261005_0025-0031; CameraCapture sends real timestamps, recorded/unity clock ratio 1.00). Time base rule: a recorded clock that agrees with vehicle/unity_time within 5% is kept (it is the control loop's own cadence); a synthetic one (pre-10-05, ratio ~1.9-2.0) is replaced by unity_time. Comfort metrics are in REAL seconds from here on: accel_p95_filtered ~1.0-1.8 m/s2 (was 0.57-0.90 on the synthetic clock), commanded_jerk_p95 1.4-3.6 m/s3; steering_jerk_max sits exactly at the 18 cap (limiter verified in real time). Pre-10-05 values are NOT comparable. History: 2026-09-28 at-car frame (s_loop 99.1->79.0, hairpin 98.7->59.0); 2026-10-05 interim unity_time pass showed Control 76-80 on the Sep goldens, which was 20 Hz vehicle-state stamp jitter, not the limiter.",
   "frozen_at": "2026-10-05",
   "tolerances": {
     "overall_score": 2.0,
@@ -12,45 +12,45 @@
   "tracks": {
     "s_loop": {
       "overall_score": 79.0,
-      "lateral_error_adj_rmse": 0.348,
-      "lateral_error_adj_p95": 0.5,
-      "accel_p95_filtered": 1.357,
-      "commanded_jerk_p95": 2.038
+      "lateral_error_adj_rmse": 0.343,
+      "lateral_error_adj_p95": 0.494,
+      "accel_p95_filtered": 1.319,
+      "commanded_jerk_p95": 3.579
     },
     "highway_65": {
-      "overall_score": 99.5,
-      "lateral_error_adj_rmse": 0.031,
-      "lateral_error_adj_p95": 0.093,
-      "accel_p95_filtered": 1.217,
-      "commanded_jerk_p95": 0.97
+      "overall_score": 99.6,
+      "lateral_error_adj_rmse": 0.03,
+      "lateral_error_adj_p95": 0.091,
+      "accel_p95_filtered": 1.036,
+      "commanded_jerk_p95": 1.415
     },
     "hairpin_15": {
       "overall_score": 59.0,
-      "lateral_error_adj_rmse": 0.594,
-      "lateral_error_adj_p95": 1.216,
-      "accel_p95_filtered": 1.452,
-      "commanded_jerk_p95": 2.994
+      "lateral_error_adj_rmse": 0.579,
+      "lateral_error_adj_p95": 1.184,
+      "accel_p95_filtered": 1.358,
+      "commanded_jerk_p95": 2.563
     },
     "sweeping_highway": {
-      "overall_score": 95.7,
-      "lateral_error_adj_rmse": 0.099,
-      "lateral_error_adj_p95": 0.186,
-      "accel_p95_filtered": 1.194,
-      "commanded_jerk_p95": 1.016
+      "overall_score": 98.3,
+      "lateral_error_adj_rmse": 0.12,
+      "lateral_error_adj_p95": 0.275,
+      "accel_p95_filtered": 1.026,
+      "commanded_jerk_p95": 1.433
     },
     "mixed_radius": {
-      "overall_score": 95.7,
-      "lateral_error_adj_rmse": 0.062,
-      "lateral_error_adj_p95": 0.118,
-      "accel_p95_filtered": 1.295,
-      "commanded_jerk_p95": 1.29
+      "overall_score": 99.2,
+      "lateral_error_adj_rmse": 0.059,
+      "lateral_error_adj_p95": 0.117,
+      "accel_p95_filtered": 1.075,
+      "commanded_jerk_p95": 1.439
     },
     "hill_highway": {
-      "overall_score": 96.6,
+      "overall_score": 99.5,
       "lateral_error_adj_rmse": 0.035,
       "lateral_error_adj_p95": 0.071,
-      "accel_p95_filtered": 1.675,
-      "commanded_jerk_p95": 1.506
+      "accel_p95_filtered": 1.792,
+      "commanded_jerk_p95": 1.44
     }
   }
 }

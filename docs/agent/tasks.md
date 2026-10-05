@@ -552,6 +552,23 @@ re-freeze follows the first sweep on the real-time player (same night). Open fol
 T-ACC-HARNESS-REAL-DT); `stack.target_loop_hz: 13.0`; re-validate every time-based limiter by
 A/B now that dt is real.
 
+**Closed 2026-10-05 00:33 — first sweep on the real-time player:** all six tracks, clock
+ratio 1.00, 0 e-stops. Goldens re-registered (`recording_20261005_0025–0031`). Final
+baselines: s_loop 79.0, highway_65 99.6, hairpin_15 59.0, sweeping_highway 98.3,
+mixed_radius 99.2, hill_highway 99.5. Comfort metrics are now in real seconds (accel P95
+1.0–1.8 m/s², commanded jerk 1.4–3.6 m/s³ — gates pass). **The interim "Control 76–80" was a
+measurement artefact, not the limiter:** differentiating steering against `vehicle/unity_time`
+(a 20 Hz vehicle-state stamp) manufactures ±1-step jitter; on the loop's own (now real) camera
+clock `steering_jerk_max` is exactly 18.0 = the cap on every curved track, i.e. the limiter
+works in real time. `select_time_base()` therefore keeps a recorded clock that agrees with
+Unity time within 5 % (`recorded_verified`) and only replaces a synthetic one. Pre-10-05
+recordings score on `unity_time` and their Control numbers are pessimistic — do not compare
+rates across the boundary. Still open: `tests/acc_closedloop_harness.py` `FRAME_DT_MEASURED_S`
+(T-ACC-HARNESS-REAL-DT), `stack.target_loop_hz: 13.0`, and the limiters' *values* — they were
+tuned in fake seconds (e.g. `pp_max_steering_jerk 18` was effectively ~50/s² in real time
+before today), so steering is now smoother/slower than every prior tuning assumed; A/B before
+touching them, and watch tonight's nightly for lateral deltas.
+
 Fix plan (as executed; each step moves every baseline / time constant):
 1. Unity: send `Time.unscaledTime` (or `fixedTime` in GT-sync) as the frame timestamp; keep
    the monotonic guard, drop the synthetic advance. Python fallback: orchestrator

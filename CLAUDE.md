@@ -187,9 +187,12 @@ computes (accel, jerk, steering rate, cadence) is differentiated against
 `vehicle/unity_time`, not `vehicle/timestamps`. The latter was Unity CameraCapture's
 synthetic counter (+1/13 s per capture) and ran 1.9–2.0× faster than real time on every
 recording before 2026-10-05, so pre-10-05 accel/jerk numbers are ~2×/~3.5× too small and
-"13 FPS" was never the machine's rate (it runs ~21.6 Hz). Kill-switch:
-`scoring_registry.TIME_BASE_SCORING = "recorded"`. Never derive a rate from
-`vehicle/timestamps`.
+"13 FPS" was never the machine's rate (it runs ~21.6 Hz). Rule: a recorded clock that agrees with
+`vehicle/unity_time` within 5 % is kept (`recorded_verified` — it is the control loop's own
+cadence; the 20 Hz vehicle-state stamp would add jitter); a synthetic one (ratio ≈ 1.9–2.0,
+every pre-10-05 file) is replaced by `unity_time`. Kill-switch:
+`scoring_registry.TIME_BASE_SCORING = "recorded"`. Never derive a rate from a pre-10-05
+`vehicle/timestamps`, and never compare accel/jerk/steering-jerk across the 2026-10-05 boundary.
 
 | Metric | Target |
 |---|---|

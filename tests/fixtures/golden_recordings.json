@@ -1,30 +1,30 @@
 {
   "schema_version": "1",
-  "milestone": "2026-09-28 \u2014 goldens re-registered to the 2026-09-26/28 daytime sweep (first fresh lateral runs since April) under the at-car lateral frame (T-METRIC-LATERAL-ERROR-FRAME)",
-  "recorded_at": "2026-09-28",
-  "notes": "Post-fix hairpin golden after PP recovery term (continuous smoothstep, upstream of rate/jerk limiter) replaced orchestrator post-limiter 1.2\u00d7/1.5\u00d7 steering multiplier. hairpin_15: 79.0 live \u2192 98.7 (Control 80\u2192100, jerk max 30.08\u219218.0). Regression sweep (4 tracks) all within tolerance of frozen 2026-04-17 baselines \u2014 no other goldens updated. sweeping_highway NOT updated \u2014 no fresh run this cycle. | 2026-09-25: sweeping_highway golden re-registered to recording_20260813_184354.h5 (1298 fr / 99.8 s, overall 98.3, Traj 94.0) \u2014 the March 2026 file (recording_20260312_100209.h5) was gone from disk, so all five sweeping_highway regression tests had been SKIPPING since, on the one track with a known real regression (T-SWEEP-HW-REGRESSION). | 2026-09-28: all six goldens re-registered to 2026-09-26 17:00\u201317:32 sweep/A-arm recordings (mixed_radius: 2026-09-28 11:04, production config: pp_map_ff_wheelbase_m 2.5, a_lat_tracking_budget_g 0.05, speed_drag_gain 0.0). Previous goldens (audit): s_loop=recording_20260417_173502.h5, highway_65=recording_20260417_173145.h5, hairpin_15=recording_20260418_185440.h5, sweeping_highway=recording_20260813_184354.h5, mixed_radius=recording_20260417_173342.h5, hill_highway=recording_20260417_181652.h5. Scoring frame is at-car; s_loop 79.0 and hairpin_15 59.0 are truthful (0.35 / 0.59 m RMS off lane centre), see GOLDEN_BELOW_FLOOR.",
+  "milestone": "2026-10-05 \u2014 goldens re-registered to the first sweep on the real-time Unity player (CameraCapture sends real timestamps; recorded/unity clock ratio 1.00); scored at the car on the unity_time base",
+  "recorded_at": "2026-10-05",
+  "notes": "Post-fix hairpin golden after PP recovery term (continuous smoothstep, upstream of rate/jerk limiter) replaced orchestrator post-limiter 1.2\u00d7/1.5\u00d7 steering multiplier. hairpin_15: 79.0 live \u2192 98.7 (Control 80\u2192100, jerk max 30.08\u219218.0). Regression sweep (4 tracks) all within tolerance of frozen 2026-04-17 baselines \u2014 no other goldens updated. sweeping_highway NOT updated \u2014 no fresh run this cycle. | 2026-09-25: sweeping_highway golden re-registered to recording_20260813_184354.h5 (1298 fr / 99.8 s, overall 98.3, Traj 94.0) \u2014 the March 2026 file (recording_20260312_100209.h5) was gone from disk, so all five sweeping_highway regression tests had been SKIPPING since, on the one track with a known real regression (T-SWEEP-HW-REGRESSION). | 2026-09-28: all six goldens re-registered to 2026-09-26 17:00\u201317:32 sweep/A-arm recordings (mixed_radius: 2026-09-28 11:04, production config: pp_map_ff_wheelbase_m 2.5, a_lat_tracking_budget_g 0.05, speed_drag_gain 0.0). Previous goldens (audit): s_loop=recording_20260417_173502.h5, highway_65=recording_20260417_173145.h5, hairpin_15=recording_20260418_185440.h5, sweeping_highway=recording_20260813_184354.h5, mixed_radius=recording_20260417_173342.h5, hill_highway=recording_20260417_181652.h5. Scoring frame is at-car; s_loop 79.0 and hairpin_15 59.0 are truthful (0.35 / 0.59 m RMS off lane centre), see GOLDEN_BELOW_FLOOR. | 2026-10-05: re-registered to recording_20261005_0025\u20130031 (sweep on the real-time player, 8d55428). Previous (Sep-26/28) goldens: s_loop=recording_20260926_173102.h5, highway_65=recording_20260926_170112.h5, hairpin_15=recording_20260926_170250.h5, sweeping_highway=recording_20260926_170411.h5, mixed_radius=recording_20260928_110401.h5, hill_highway=recording_20260926_171857.h5. Control 97\u2013100: the steering-jerk limiter sits exactly at its 18 cap in real seconds (the interim 76\u201380 was unity_time 20 Hz stamp jitter).",
   "tracks": {
-    "s_loop": "data/recordings/recording_20260926_173102.h5",
-    "highway_65": "data/recordings/recording_20260926_170112.h5",
-    "hairpin_15": "data/recordings/recording_20260926_170250.h5",
-    "sweeping_highway": "data/recordings/recording_20260926_170411.h5",
-    "mixed_radius": "data/recordings/recording_20260928_110401.h5",
-    "hill_highway": "data/recordings/recording_20260926_171857.h5"
+    "s_loop": "data/recordings/recording_20261005_002539.h5",
+    "highway_65": "data/recordings/recording_20261005_002657.h5",
+    "hairpin_15": "data/recordings/recording_20261005_002831.h5",
+    "sweeping_highway": "data/recordings/recording_20261005_002938.h5",
+    "mixed_radius": "data/recordings/recording_20261005_003047.h5",
+    "hill_highway": "data/recordings/recording_20261005_003154.h5"
   },
   "documented_scores": {
     "s_loop": "79.0",
     "highway_65": "99.6",
     "hairpin_15": "59.0",
-    "sweeping_highway": "98.6",
-    "mixed_radius": "99.1",
+    "sweeping_highway": "98.3",
+    "mixed_radius": "99.2",
     "hill_highway": "99.5"
   },
   "documented_metrics": {
-    "s_loop": "{'lateral_rmse_at_car_m': 0.348, 'lateral_p95_at_car_m': 0.5, 'lateral_rmse_lookahead_refx_m': 0.121, 'trajectory': 79.1, 'accel_p95_filtered': 0.704, 'commanded_jerk_p95': 1.084, 'estops': 0}",
-    "highway_65": "{'lateral_rmse_at_car_m': 0.031, 'lateral_p95_at_car_m': 0.093, 'lateral_rmse_lookahead_refx_m': 0.044, 'trajectory': 98.5, 'accel_p95_filtered': 0.569, 'commanded_jerk_p95': 0.624, 'estops': 0}",
-    "hairpin_15": "{'lateral_rmse_at_car_m': 0.594, 'lateral_p95_at_car_m': 1.216, 'lateral_rmse_lookahead_refx_m': 0.177, 'trajectory': 50.3, 'accel_p95_filtered': 0.806, 'commanded_jerk_p95': 1.56, 'estops': 0}",
-    "sweeping_highway": "{'lateral_rmse_at_car_m': 0.099, 'lateral_p95_at_car_m': 0.186, 'lateral_rmse_lookahead_refx_m': 0.148, 'trajectory': 95.0, 'accel_p95_filtered': 0.571, 'commanded_jerk_p95': 0.624, 'estops': 0}",
-    "mixed_radius": "{'lateral_rmse_at_car_m': 0.062, 'lateral_p95_at_car_m': 0.118, 'lateral_rmse_lookahead_refx_m': 0.124, 'trajectory': 96.9, 'accel_p95_filtered': 0.633, 'commanded_jerk_p95': 0.624, 'estops': 0}",
-    "hill_highway": "{'lateral_rmse_at_car_m': 0.035, 'lateral_p95_at_car_m': 0.071, 'lateral_rmse_lookahead_refx_m': 0.196, 'trajectory': 98.2, 'accel_p95_filtered': 0.898, 'commanded_jerk_p95': 0.78, 'estops': 0}"
+    "s_loop": "{'lateral_rmse_at_car_m': 0.343, 'lateral_p95_at_car_m': 0.494, 'trajectory': 79.6, 'control': 97.9, 'accel_p95_filtered': 1.319, 'commanded_jerk_p95': 3.579, 'steering_jerk_max': 18.0, 'estops': 0, 'clock_ratio': 1.0, 'time_base': 'recorded_verified'}",
+    "highway_65": "{'lateral_rmse_at_car_m': 0.03, 'lateral_p95_at_car_m': 0.091, 'trajectory': 98.5, 'control': 100.0, 'accel_p95_filtered': 1.036, 'commanded_jerk_p95': 1.415, 'steering_jerk_max': 15.0, 'estops': 0, 'clock_ratio': 1.0, 'time_base': 'recorded_verified'}",
+    "hairpin_15": "{'lateral_rmse_at_car_m': 0.579, 'lateral_p95_at_car_m': 1.184, 'trajectory': 51.1, 'control': 96.9, 'accel_p95_filtered': 1.358, 'commanded_jerk_p95': 2.563, 'steering_jerk_max': 18.0, 'estops': 0, 'clock_ratio': 1.0, 'time_base': 'recorded_verified'}",
+    "sweeping_highway": "{'lateral_rmse_at_car_m': 0.12, 'lateral_p95_at_car_m': 0.275, 'trajectory': 94.0, 'control': 100.0, 'accel_p95_filtered': 1.026, 'commanded_jerk_p95': 1.433, 'steering_jerk_max': 18.0, 'estops': 0, 'clock_ratio': 1.0, 'time_base': 'recorded_verified'}",
+    "mixed_radius": "{'lateral_rmse_at_car_m': 0.059, 'lateral_p95_at_car_m': 0.117, 'trajectory': 97.1, 'control': 100.0, 'accel_p95_filtered': 1.075, 'commanded_jerk_p95': 1.439, 'steering_jerk_max': 18.0, 'estops': 0, 'clock_ratio': 1.0, 'time_base': 'recorded_verified'}",
+    "hill_highway": "{'lateral_rmse_at_car_m': 0.035, 'lateral_p95_at_car_m': 0.071, 'trajectory': 98.3, 'control': 100.0, 'accel_p95_filtered': 1.792, 'commanded_jerk_p95': 1.44, 'steering_jerk_max': 18.0, 'estops': 0, 'clock_ratio': 1.0, 'time_base': 'recorded_verified'}"
   }
 }

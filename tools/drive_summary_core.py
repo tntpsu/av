@@ -5361,6 +5361,21 @@ def select_time_base(f, recorded, mode: str = TIME_BASE_SCORING) -> Dict:
     if mode != "unity_time" or recorded is None or len(recorded) < 3:
         return out
     n = len(recorded)
+    # Post-2026-10-05 recordings carry a REAL camera timestamp. It is the clock the control
+    # loop actually stepped on (one frame per camera frame), so it is the right base for
+    # controller-output rates; `vehicle/unity_time` is the 20 Hz vehicle-state stamp and
+    # differentiating steering against it manufactures ±1-step jitter (false jerk spikes).
+    # Rule: if the recorded clock agrees with Unity time in span (±5 %), keep it; only a
+    # synthetic clock (ratio ≈ 1.9–2.0) is replaced.
+    rec_span = float(recorded[-1] - recorded[0])
+    if "vehicle/unity_time" in f:
+        ut = np.asarray(f["vehicle/unity_time"][:], dtype=float)
+        if ut.size >= n and np.all(np.isfinite(ut[:n])) and (ut[n - 1] - ut[0]) > 1.0 and rec_span > 0:
+            ratio = rec_span / float(ut[n - 1] - ut[0])
+            if abs(ratio - 1.0) <= 0.05:
+                out.update({"time_base": "recorded_verified", "time_base_field": "vehicle/timestamps",
+                            "recorded_over_base_ratio": ratio})
+                return out
     for key in TIME_BASE_FIELDS:
         if key not in f:
             continue
