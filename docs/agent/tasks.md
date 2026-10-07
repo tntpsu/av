@@ -505,6 +505,36 @@ Step 2 (after a week of numbers): promote to a Trajectory-layer deduction or a
 that is a scoring change → baseline re-freeze per protocol. Until then the
 sweep prints it and must not gate on it.
 
+### T-METRIC-JERK-CADENCE — jerk gates were calibrated on the synthetic clock (2026-10-07)
+
+`ACC_JERK_P95_GATE_MPS3 = 4.0` (and the 10.0 emergency gate) were set when `dt` was the
+synthetic 1/13 s counter. Measured jerk ∝ 1/dt²; the real frame period is 0.036–0.05 s,
+so identical vehicle behaviour reads 4–5× larger. Real-clock readings (post-10-05): H2 7.8,
+H8 8.4 (34 % active), H4 2.9 m/s³. **Done 2026-10-07 (provisional):** gates re-based to
+15.0 / 37.5 (= 4.0 × (0.0769/0.040)²), H8 `Expected:` line and the acc-sweep PROMPT updated,
+`tests/test_acc_scoring.py` pinned to 15.0. Pre-10-05 recordings re-scored on `unity_time`
+read 14–20 m/s³ — 20 Hz vehicle-state-stamp jitter, not usable for calibration.
+
+**Open:** (1) after ~7 real-clock nights, re-derive the bar from the healthy scenarios'
+distribution and freeze it; (2) the metric itself is wrong — a frame-rate-dependent p95 of
+raw-ish measured jerk moves whenever the loop rate moves (it did: 21.6 Hz full-rate vs 28 Hz
+with the camera stride). Gate a fixed-cutoff low-passed jerk (e.g. 2 Hz Butterworth on
+speed → d²/dt²) or the commanded jerk instead.
+
+### T-ACC-HARNESS-REAL-DT — the closed-loop harness is calibrated in the synthetic time base (2026-10-07)
+
+`FRAME_DT_MEASURED_S = 0.0769` was the counter. Switching the harness to the real period
+(0.036, median of 19,394 post-fix frames) makes the production config run H5 into
+TTC_ESTOP / collision — which Unity never does (H5 PASS 99.6 nightly). So the plant
+constants (K_throttle 7, K_brake 4.5, 1-frame actuator lag = 77 ms then, 36 ms now) absorbed
+the fake dt. Kept the harness at 0.0769 (internally consistent, calibration anchors intact),
+added `FRAME_DT_REAL_S` and a strict-xfail reproducer (`TestRealFramePeriod`). **Fix:**
+re-identify the point-mass plant from post-10-05 recordings (throttle/brake → accel with
+real dt and real actuator delay), then move `FRAME_DT_MEASURED_S` and remove the marker.
+Also corrects T-ACC-DT-HARDCODE: the ACC's hardcoded 1/30 s was ~7 % off the real period,
+not 57 % — the "43 % of design rate" claim was a fake-clock artefact; `acc.use_measured_dt`
+A/B results stand but the mechanism attributed to them does not.
+
 ### T-CLOCK-SYNTHETIC-CAPTURE-TIMESTAMP — P0 — the recorded clock is not a clock (2026-09-29)
 
 `vehicle/timestamps` = `camera/timestamps` = `control/timestamps` = Unity CameraCapture's

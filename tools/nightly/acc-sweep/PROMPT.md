@@ -192,7 +192,7 @@ Keep these exact shapes or the email degrades to the raw text:
 1. **Gate only on what the scenario's `Expected:` line names.** `acc_pipeline_analysis`
    prints `[FAIL ≥95%]` next to detection on EVERY run; that is the tool's generic
    reference bar, not a sweep gate. H8's Expected is "smooth engage at ~60 m gap;
-   no hunting; jerk P95 ≤ 4.0" — no detection criterion. Night 23 and night 43
+   no hunting; jerk P95 ≤ 15.0" (re-based 2026-10-07 from 4.0: the old bar was calibrated on the synthetic clock; see Scoring changes) — no detection criterion. Night 23 and night 43
    both FAILed H8 on it in error.
 2. **Catch-up scenarios have run-length-dependent detection rates.** H7 and H8
    start the lead beyond radar range BY DESIGN (H8 header: "beyond radar range at
@@ -279,6 +279,12 @@ memory `feedback_nightly_retro_proposes_into_void`.
   report-only and expected. Do not call this a regression; compare only against nights ≥ 2026-10-05 or
   against re-scored older recordings (the scorer is era-aware: it uses unity_time whenever present).
 - `RECORDINGS_PRUNE` lines and 45 MB camera-strided recordings are normal (retention + stride, 2026-10-01).
+- **ACC jerk gate 2026-10-07:** `ACC_JERK_P95_GATE_MPS3` 4.0 → 15.0 (emergency 10 → 37.5), PROVISIONAL.
+  Measured jerk scales with 1/dt² and the old bar was set on the synthetic clock. Real-clock readings so
+  far: H2 7.8, H8 8.4, H4 2.9 m/s³. Report the gate value per scenario each night so the bar can be
+  re-derived after a week; a FAIL on jerk alone is "provisional-bar" until then. Pre-10-05 recordings
+  re-scored on unity_time read 14–20 m/s³ — that is 20 Hz vehicle-state-stamp jitter, not vehicle
+  behaviour; never calibrate from them.
 
 ## What NOT to do
 

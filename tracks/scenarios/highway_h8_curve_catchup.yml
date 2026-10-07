@@ -2,7 +2,7 @@
 # Lead at 200m arc-distance, slower 10 m/s. Ego target 15 m/s (5 m/s closing speed).
 # Lead is beyond radar range at start (~197m); ego drives free until ~27s then ACC engages near S-curve.
 # Tests ACC engage + curve speed governor coexistence while both vehicles approach the R500 S-curve.
-# Expected: smooth ACC engage at ~60m gap; no hunting; jerk P95 ≤ 4.0.
+# Expected: smooth ACC engage at ~60m gap; no hunting; jerk P95 ≤ 15.0 (real clock, provisional 2026-10-07 — was 4.0 on the synthetic 1/13 s clock; fresh real-clock reading 8.4).
 # base: tracks/highway_65.yml
 
 name: highway_65

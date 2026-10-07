@@ -413,7 +413,9 @@ class TestACCEmergencyExemption:
             ACC_JERK_P95_EMERGENCY_GATE_MPS3,
             ACC_JERK_P95_GATE_MPS3,
         )
-        assert ACC_JERK_P95_EMERGENCY_GATE_MPS3 == 10.0
+        # 2026-10-07: re-based to the real clock (was 10.0 / 4.0 on the synthetic 1/13 s clock)
+        assert ACC_JERK_P95_EMERGENCY_GATE_MPS3 == 37.5
+        assert ACC_JERK_P95_EMERGENCY_GATE_MPS3 == 2.5 * ACC_JERK_P95_GATE_MPS3
         assert ACC_JERK_P95_EMERGENCY_GATE_MPS3 > ACC_JERK_P95_GATE_MPS3
 
     def test_accel_emergency_gate_strictly_looser_than_nominal(self):

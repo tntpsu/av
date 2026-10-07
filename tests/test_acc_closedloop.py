@@ -47,7 +47,8 @@ from pathlib import Path
 import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from acc_closedloop_harness import (  # noqa: E402
+from acc_closedloop_harness import (
+    FRAME_DT_REAL_S,  # noqa: E402
     ACC_DT_PRODUCTION_S,
     run_closedloop,
     FRAME_DT_MEASURED_S,
@@ -552,3 +553,17 @@ class TestEquilibriumBiasRouting:
             assert not r.collided and r.frames_in(*ESTOP_STATES) == 0, r.summary()
             assert r.ttc_min_acc_active() >= TTC_GATE_S, r.summary()
 
+
+
+class TestRealFramePeriod:
+    """T-ACC-HARNESS-REAL-DT (2026-10-07). The harness is calibrated in the synthetic
+    1/13 s time base. Stepping the SAME plant at the real frame period (0.036 s) makes the
+    production config run H5 into TTC_ESTOP / collision — which Unity does not do (H5 PASS
+    99.6 on 2026-10-04 and every night since). So the plant constants, not the controller,
+    are what the fake clock calibrated. Strict xfail: when the plant is re-identified on
+    post-10-05 recordings and this passes, remove the marker and move FRAME_DT_MEASURED_S."""
+
+    @pytest.mark.xfail(strict=True, reason="plant constants identified in the synthetic time base; re-identify at real dt (T-ACC-HARNESS-REAL-DT)")
+    def test_h5_production_at_real_dt_is_clean(self):
+        r = run_h5_stop_go(highway_cfg, dt=FRAME_DT_REAL_S, n_frames=int(65.0 / FRAME_DT_REAL_S))
+        assert r.frames_in("TTC_ESTOP", "COLLAPSED_GAP_STOP") == 0 and r.min_true_gap > 0.3, r.summary()

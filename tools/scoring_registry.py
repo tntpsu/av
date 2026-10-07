@@ -152,7 +152,13 @@ ACC_POST_CONV_TOL_FRAC: float = 0.20          # —  — convergence = first ACC
                                             #      gap_error≈6–8m. With ego-from-rest startup, full-run RMSE≈30m.
                                             #      Gate at 35m catches broken ACC (gap never closes, RMSE≈50m+)
                                             #      while passing correctly-converging ACC (RMSE≈28–32m).
-ACC_JERK_P95_GATE_MPS3: float = 4.0         # m/s³ — following jerk (tighter than 6.0 free-flow)
+# 2026-10-07 PROVISIONAL: 4.0 was calibrated on the synthetic 1/13 s clock. Measured jerk
+# scales with 1/dt², and the real frame period is ~0.036–0.05 s, so the same vehicle
+# behaviour now reads ~4–5× larger. Post-fix real-clock values: H2 7.8, H8 8.4 (34 %
+# active), H4 2.9 m/s³. 15.0 = 4.0 × (0.0769/0.040)². Re-derive from a week of real-clock
+# recordings (T-METRIC-JERK-CADENCE: a frame-rate-dependent jerk gate is the wrong metric;
+# gate a fixed-cutoff filtered jerk or the commanded jerk instead).
+ACC_JERK_P95_GATE_MPS3: float = 15.0        # m/s³ — following jerk, real clock (was 4.0 synthetic-clock)
 ACC_DETECTION_RATE_GATE: float = 0.95       # —  — min detection rate when lead present
 ACC_EMERGENCY_BRAKE_GAP_FACTOR: float = 1.5  # —  — gap < factor×speed → emergency brake
 ACC_MIN_ACTIVE_FRAME_RATE: float = 0.10     # —  — min fraction for ACC section to activate
@@ -209,7 +215,7 @@ EMERGENCY_ACC_STATES: frozenset[str] = frozenset({
 })
 ACCEL_P95_EMERGENCY_GATE_MPS2: float = 12.0  # matches IDM -12 m/s² saturation floor
 JERK_P95_EMERGENCY_GATE_MPS3: float = 12.0   # 2× nominal (6.0) for brake-onset transient
-ACC_JERK_P95_EMERGENCY_GATE_MPS3: float = 10.0  # 2.5× nominal follow-mode (4.0)
+ACC_JERK_P95_EMERGENCY_GATE_MPS3: float = 37.5  # 2.5× nominal follow-mode (15.0; was 10.0 on the synthetic clock)
 
 
 def is_emergency_acc_state(state_code: "str | None") -> bool:

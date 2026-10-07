@@ -188,7 +188,7 @@ class TestAccHealthSummaryUnit:
         """Verify registry constants are accessible and have expected values."""
         assert ACC_GAP_RMSE_GATE_M == pytest.approx(35.0)
         assert ACC_TTC_MIN_GATE_S == pytest.approx(2.0)
-        assert ACC_JERK_P95_GATE_MPS3 == pytest.approx(4.0)
+        assert ACC_JERK_P95_GATE_MPS3 == pytest.approx(15.0)  # 2026-10-07 real-clock provisional (was 4.0)
         assert ACC_DETECTION_RATE_GATE == pytest.approx(0.95)
         assert ACC_NEAR_MISS_GAP_M == pytest.approx(2.0)
         assert ACC_TTC_CRITICAL_S == pytest.approx(1.5)

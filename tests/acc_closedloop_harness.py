@@ -21,10 +21,12 @@ Orchestrator glue that sits between the controllers is reproduced verbatim from
 ``av_stack/orchestrator.py`` and cited by line so it can be re-checked:
 
   * ACC is stepped with a HARDCODED dt of 1/30 s  (orchestrator.py:9864) while
-    the plant and the longitudinal controller see the real frame period.  The
-    measured frame period on the Mac mini is 76.9 ms (13 FPS), so the IDM
-    target-speed integration runs at 43 % of its designed rate.  ``acc_dt`` is
-    exposed so tests can show the effect.
+    the plant and the longitudinal controller see the frame period.  Until
+    2026-10-05 that period was believed to be 76.9 ms (13 FPS) — it was the
+    synthetic capture counter (T-CLOCK-SYNTHETIC-CAPTURE-TIMESTAMP).  The real
+    frame period is ~36 ms median (28 Hz with the nightly camera stride, 46 ms
+    at full-rate recording), so the hardcode was ~7 % off, not 57 %.  ``acc_dt``
+    is still exposed so tests can show the effect of any mismatch.
   * ``_pf_resolve_longitudinal_target`` (orchestrator.py:9927) — ACC owns the
     target only in states outside {FREE_FLOW, DETECTION_LOSS, CUTOUT}.  In CUTOUT
     the governor's free-flow target is applied unmodified.
@@ -69,7 +71,15 @@ from control.pid_controller import LongitudinalController      # noqa: E402
 from control.radar_sensor import ForwardRadarSensor            # noqa: E402
 
 # Measured, not assumed — see feedback_recording_dependent_tests_cycle / cadence memos.
-FRAME_DT_MEASURED_S = 0.0769          # 13 FPS Mac mini, median of 1785 frames
+# 2026-10-07: 0.0769 is NOT the machine's frame period — it was the synthetic capture
+# counter (T-CLOCK-SYNTHETIC-CAPTURE-TIMESTAMP). The real period is FRAME_DT_REAL_S below.
+# The harness stays on 0.0769 because its plant constants (K_throttle, K_brake, the
+# 1-frame actuator lag) and both calibration anchors (H5 known-good, G2 known-bad) were
+# identified in that time base; at the real dt the same plant predicts an H5 collision
+# that Unity never shows (see TestRealFramePeriod). Re-identify the plant on post-10-05
+# recordings before switching (T-ACC-HARNESS-REAL-DT).
+FRAME_DT_MEASURED_S = 0.0769          # harness time base (synthetic-counter era, calibrated)
+FRAME_DT_REAL_S = 0.036               # real frame period: median of 19,394 post-clock-fix frames (2026-10-05/06)
 ACC_DT_PRODUCTION_S = 1.0 / 30.0      # orchestrator.py:9864 hardcode
 
 G_MPS2 = 9.81
@@ -295,7 +305,7 @@ def run_closedloop(
     radar_range_offset_m: float = RADAR_RANGE_OFFSET_MEASURED_M,
     contact_frames_after: int = 40,
     route_positive_idm_accel: Optional[bool] = None,  # None → cfg acc_idm_accel_routing_positive (T-ACC-EQ-BIAS probe)
-    speed_noise_sigma_mps: float = 0.0,      # measured-speed noise seen by the controllers (Unity ≈ 0.02–0.03 at 13 FPS)
+    speed_noise_sigma_mps: float = 0.0,      # measured-speed noise seen by the controllers (Unity ≈ 0.02–0.03 per frame)
     radar_noise_sigma_m: float = 0.0,        # AVBridge.cs radarDistanceNoiseSigma = 0.15
     radar_rate_noise_sigma_mps: float = 0.0, # AVBridge.cs radarRateNoiseSigma   = 0.05
     rng_seed: int = 7,
