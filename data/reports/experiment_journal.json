@@ -610,5 +610,27 @@
     "files_changed": [],
     "superseded_by": null,
     "resolved_by": null
+  },
+  {
+    "date": "2026-10-07",
+    "target_metric": "ACC gap convergence / ego speed on straights (H2/H4/H8)",
+    "target_track": "highway_65",
+    "approach": "Diagnosis of speed_governor curve-cap latch from recording_20261005_040914 + code read; fix behind trajectory.speed_governor.curve_cap_only_when_binding (default false).",
+    "fix_level": "CODE (kill-switched, A/B pending)",
+    "hypothesis": "Nightly agent: comfort_speed startup spike / numerical instability.",
+    "outcome": "ROOT_CAUSE_FOUND",
+    "outcome_status": "OPEN",
+    "metric_before": null,
+    "metric_after": null,
+    "root_cause_of_failure": null,
+    "root_cause_detail": "cap = min(target, v_entry) - margin subtracts the 0.4 margin even when the curve allows far more than the target; highway_65 preview kappa 0.002 == curve_cap_curvature_min triggers map_preview_active from frame 0 \u2192 cap = target - 0.4 for whole runs (11.6 @12, 14.6 @15). Not the comfort-speed spike. Unit-tested; Unity A/B pending.",
+    "iterations_spent": 1,
+    "files_changed": [
+      "control/speed_governor.py",
+      "config/av_stack_config.yaml",
+      "tests/test_speed_governor_curve_cap.py"
+    ],
+    "superseded_by": null,
+    "resolved_by": null
   }
 ]

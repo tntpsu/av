@@ -103,6 +103,12 @@ class SpeedGovernorConfig:
     curve_cap_hysteresis_mps: float = 0.35
     curve_cap_min_speed_mps: float = 3.0
     curve_cap_margin_mps: float = 0.4
+    # T-GOVERNOR-CURVE-CAP-LATCH (2026-10-07): only cap when the curve actually binds.
+    # Legacy (False) applies `min(target, v_entry) − margin` even when v_entry ≫ target,
+    # which pins the ego 0.4 m/s under its target for as long as ANY preview κ ≥
+    # curve_cap_curvature_min is in the horizon (highway_65's R500 = exactly 0.002 → the
+    # cap latched for whole runs and starved ACC on H2/H4/H8).
+    curve_cap_only_when_binding: bool = False
     curve_cap_curvature_min: float = 0.002
     curve_cap_rise_min: float = 0.0005
     curve_cap_peak_lat_accel_g: float = 0.26
@@ -538,10 +544,23 @@ class SpeedGovernor:
 
         preview_distance = max(1.0, float(current_target) * self.config.curve_preview_lookahead_scale)
         v_entry_sq = curve_speed ** 2 + 2.0 * self.config.curve_cap_max_decel_mps2 * preview_distance
-        cap_speed = min(float(current_target), math.sqrt(max(0.0, v_entry_sq)))
+        v_entry = math.sqrt(max(0.0, v_entry_sq))
+        if self.config.curve_cap_only_when_binding and (v_entry - self.config.curve_cap_margin_mps) >= float(current_target):
+            # The curve ahead allows a higher speed than the target already is: no cap.
+            # (Legacy path below subtracts the margin from the target regardless.)
+            self._curve_cap_last_speed = None
+            return None, False, "not_binding", 0.0
+        cap_speed = min(float(current_target), v_entry)
         cap_speed = max(self.config.curve_cap_min_speed_mps, cap_speed - self.config.curve_cap_margin_mps)
 
-        reason = "commit" if commit_active else ("entry" if entry_active else "rise")
+        if commit_active:
+            reason = "commit"
+        elif entry_active:
+            reason = "entry"
+        elif rise_active:
+            reason = "rise"
+        else:
+            reason = "map_preview"   # was mislabelled "rise" before 2026-10-07
         local_state = str(curve_local_state or "").strip().upper()
         if local_state in {"ENTRY", "COMMIT"}:
             dynamic_state = local_state
@@ -830,6 +849,9 @@ def build_speed_governor(trajectory_cfg: dict, speed_planner_cfg: dict) -> Speed
                 "curve_cap_margin_mps",
                 trajectory_cfg.get("curve_cap_margin_mps", 0.4),
             )
+        ),
+        curve_cap_only_when_binding=bool(
+            gov_cfg_section.get("curve_cap_only_when_binding", False)
         ),
         curve_cap_curvature_min=float(
             gov_cfg_section.get(

@@ -851,6 +851,11 @@ trajectory:
     curve_cap_hysteresis_mps: 0.35
     curve_cap_min_speed_mps: 3.0
     curve_cap_margin_mps: 0.4
+    # T-GOVERNOR-CURVE-CAP-LATCH 2026-10-07: false = legacy `min(target, v_entry) − margin` even when the
+    # curve allows far more than the target (highway_65 R500 κ 0.002 ≥ curvature_min → cap = target − 0.4
+    # for whole runs, starving ACC on H2/H4/H8). true = cap only when v_entry − margin < target.
+    # Kill-switch; flip to true after the highway_65 A/B (≥5 runs).
+    curve_cap_only_when_binding: false
     curve_cap_curvature_min: 0.002
     curve_cap_rise_min: 0.0005
     curve_cap_peak_lat_accel_g: 0.26

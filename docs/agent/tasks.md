@@ -505,6 +505,33 @@ Step 2 (after a week of numbers): promote to a Trajectory-layer deduction or a
 that is a scoring change → baseline re-freeze per protocol. Until then the
 sweep prints it and must not gate on it.
 
+### T-GOVERNOR-CURVE-CAP-LATCH — root cause found (2026-10-07); fix kill-switched, A/B pending
+
+**Mechanism (`control/speed_governor.py::_compute_curve_cap_speed`):** on highway_65 the
+preview κ is 0.002 (the R500 curves, seen from 500 m away by the map horizon) — exactly
+`curve_cap_curvature_min`, so `map_preview_active` is true from frame 0 regardless of
+intent or distance. The curve's feasible speed is √(0.26·9.81/0.002) ≈ 36 m/s, far above
+the 12 m/s target, but the cap formula is `min(target, v_entry) − margin`, so the cap is
+**target − 0.4 = 11.6 m/s for the whole run**, labelled "rise" by the reason fall-through.
+That is why the nightlies saw "11.6 one night, 14.6 another": it is target − 0.4 (12.0 vs
+15.0 target), not governor noise, and why the cap latched 100 % on a straight. It holds
+the ego 0.4 m/s under its target → below a 12 m/s lead → the gap grows to the 150 m radar
+edge (H2/H4) or never closes (H8 0 % ACC active). The comfort-speed "1374 m/s spike" is a
+separate start-up artefact (`comfort_speed` = −1 / 1374) and is NOT the cause.
+
+**Fix (physics-first, no tuning):** `curve_cap_only_when_binding` — the cap is applied only
+when `v_entry − margin < target`; otherwise inactive with reason `not_binding`. Reason label
+corrected (`map_preview`). Kill-switch, default false in code and config
+(`trajectory.speed_governor.curve_cap_only_when_binding`). Tests:
+`tests/test_speed_governor_curve_cap.py` (H8 signature legacy 11.6 / flagged inactive;
+R33 ahead still capped identically). **A/B next daytime window (≥5 pairs):** highway_65
+lateral (`--param trajectory.speed_governor.curve_cap_only_when_binding --a false --b true`)
+and H2 (`--config config/acc_highway.yaml --track-yaml tracks/scenarios/highway_h2_steady.yml`,
+score ACC arms manually: gap RMSE vs EQ, acc_active %, ego speed). Expect ego 11.6 → 12.0 on
+straights, no change on curved tracks (cap still binds there), H2/H4/H8 gap convergence
+restored. Also fix H8's spec: its header says "ego target 15 m/s" but nothing sets it
+(`target_speed_raw` = 12.0 in the recording).
+
 ### T-METRIC-JERK-CADENCE — jerk gates were calibrated on the synthetic clock (2026-10-07)
 
 `ACC_JERK_P95_GATE_MPS3 = 4.0` (and the 10.0 emergency gate) were set when `dt` was the
