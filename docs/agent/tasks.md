@@ -531,7 +531,7 @@ radar cone (consequence, not cause).
 | overlay minus `control.longitudinal` (2) | 34–41 % | 0.18–0.28 | 0 |
 | overlay with `accel_tracking_enabled` restored (2) | 37–40 % | 0.16–0.21 | 0 |
 | overlay minus `reference_distractor_*` keys (2) | 43 % | 0.27–0.35 | 1/2 |
-| **overlay with `mpc_leff_estimation_enabled: false` (5)** | **0 %** | **≈0.03** | 0 |
+| **overlay with `mpc_leff_estimation_enabled: false` (5)** | **0 %** | **0.024–0.033** | 0/5, ACC 100 % |
 
 **Mechanism:** `acc_hill_highway.yaml` → `_inherits: mpc_hill_highway.yaml` →
 `trajectory.mpc.mpc_leff_estimation_enabled: true` (6e729ea, 2026-04-03). The base turned the
@@ -543,7 +543,7 @@ model demands ~3× the steering, saturates, and limit-cycles. The lateral sweep 
 (no overlay). Also lateral: `|steer| p95 0.81` > `max_steering 0.7` in several variants — the
 clip is not the last stage (recovery term?) — separate small item.
 
-**Fix (done):** `mpc_hill_highway.yaml` pins the estimator `false` with the history;
+**Fix (done, 2026-10-07, commit on main):** `mpc_hill_highway.yaml` pins the estimator `false` with the history;
 `tests/test_config_overlays_respect_base_safety.py` loads every overlay through the real
 loader and asserts stability-gated keys match the base. **Lesson for the agents:** read the
 `EMERGENCY STOP: <type>` log line before theorising about an e-stop; and a scenario overlay
