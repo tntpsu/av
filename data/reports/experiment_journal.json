@@ -632,5 +632,26 @@
     ],
     "superseded_by": null,
     "resolved_by": null
+  },
+  {
+    "date": "2026-10-07",
+    "target_metric": "G1 lateral stability / e-stops (gt_right_offroad)",
+    "target_track": "hill_g1_grade_following",
+    "approach": "Counterfactual series on the G1 scenario (60 s each): production overlay x5; minus lateral block x5; ACC off x2; no overlay x2; updated geometry x2; minus longitudinal x2; accel_tracking restored x2; minus distractor keys x2; mpc_leff_estimation_enabled=false x5.",
+    "fix_level": "CONFIG (overlay inheritance)",
+    "hypothesis": "(nightly) radar gap 0.0 \u2192 EB false stop; (mine, in order) overlay lateral overrides \u2192 longitudinal hunting \u2192 distractor guard \u2192 track geometry \u2192 inherited RLS L_eff estimator.",
+    "outcome": "ROOT_CAUSE_FOUND",
+    "outcome_status": "RESOLVED",
+    "metric_before": 0.28,
+    "metric_after": 0.03,
+    "root_cause_of_failure": null,
+    "root_cause_detail": "Only removing the WHOLE overlay or disabling mpc_leff_estimation_enabled (inherited from mpc_hill_highway.yaml) removes the 0.5 Hz \u00b10.70 steering limit cycle: control/mpc_leff_value pegs at the 8.0 m clamp in the R100 arcs (true 2.5), LMPC (the active regime on hill curves) saturates. Base disabled the estimator 2026-04-06 as unstable; overlay kept it on. Four earlier hypotheses refuted by A/B, each ~4 min of Unity.",
+    "iterations_spent": 6,
+    "files_changed": [
+      "config/mpc_hill_highway.yaml",
+      "tests/test_config_overlays_respect_base_safety.py"
+    ],
+    "superseded_by": null,
+    "resolved_by": null
   }
 ]

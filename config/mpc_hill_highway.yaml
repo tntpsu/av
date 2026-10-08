@@ -9,6 +9,14 @@
 trajectory:
   mpc:
     mpc_dynamic_model_enabled: false
-    mpc_leff_estimation_enabled: true
+    # 2026-10-07 (T-ACC-G1-LEFF-OSCILLATION): was `true` since 6e729ea (2026-04-03). The base
+    # config turned the RLS estimator OFF three days later (8a5c0c5: "unstable on curve
+    # transitions") but this overlay kept re-enabling it for every hill ACC scenario via
+    # `acc_hill_highway.yaml: _inherits`. On G1 the estimate pegs at its 8.0 m clamp in the
+    # R100 arcs (true L 2.5 m) → the LMPC saturates steering at ±0.70 in a 0.5 Hz limit
+    # cycle → 0.9 m lateral swings and gt_right_offroad e-stops (every G1 run since the
+    # 2026-09-26 re-spec made following possible). Counterfactual 2026-10-07: this one key
+    # off → at-car RMS 0.03 m, ACC 100 %, 0 e-stops. Must track the base value.
+    mpc_leff_estimation_enabled: false
     mpc_tire_ekf_enabled: false
     mpc_tire_ekf_use_imu_yaw_rate: true

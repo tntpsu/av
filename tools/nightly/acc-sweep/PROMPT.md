@@ -187,6 +187,21 @@ Keep these exact shapes or the email degrades to the raw text:
 3. **A standing `bias (gap−EQ)` of +3–5 m is T-ACC-EQ-BIAS**, present on every
    scenario — report it, do not attribute it to the scenario under review.
 
+## E-stop verdicts — read the logged type before writing a root cause
+
+`control/emergency_stop` has FIVE sources and the recording does not say which fired; the
+stack log does: grep the run's `av_stack.log` (or the acc-sweep log) for `EMERGENCY STOP:` —
+the line names the type (`gt_right_offroad`, `lateral_error_exceeded`, `perception_failed`,
+`out_of_bounds`, `ACC TTC_ESTOP`, `ACC COLLAPSED_GAP_STOP`). Before attributing a stop to
+the ACC, check `vehicle/acc_request_estop` at the stop frame — if it is 0 the ACC did not
+request it, and every ACC e-stop path also requires `radar_fwd_detected` (a 0.0 gap on an
+undetected frame cannot fire them). Night-56 wrote a "radar gap 0.0 → EB false stop" root
+cause for G1 that the data contradicted; the real cause was a steering limit cycle from
+`mpc_leff_estimation_enabled` inherited through `acc_hill_highway.yaml` (fixed 2026-10-07,
+T-ACC-G1-LEFF-OSCILLATION). When a scenario misbehaves and the lateral sweep on the same
+track does not, diff the FULLY MERGED overlay (`av_stack.config.load_config(path)`) against
+the base — the runtime-config snapshot omits sections.
+
 ## Detection-rate verdicts — read before FAILing anything on detection
 
 1. **Gate only on what the scenario's `Expected:` line names.** `acc_pipeline_analysis`

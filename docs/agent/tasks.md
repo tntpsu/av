@@ -505,6 +505,53 @@ Step 2 (after a week of numbers): promote to a Trajectory-layer deduction or a
 that is a scoring change → baseline re-freeze per protocol. Until then the
 sweep prints it and must not gate on it.
 
+### T-ACC-G1-LEFF-OSCILLATION — G1's e-stops were an LMPC limit cycle from a re-enabled RLS estimator (2026-10-07)
+
+**What the nightly reported (wrong):** "false emergency stop — radar gap defaults to 0.0 when
+undetected, EB reads it as a collision". `acc_request_estop` is 0 at the stop and every ACC
+e-stop path requires `reading.detected`; the stack log says what fired:
+`EMERGENCY STOP: GT lane-boundary offroad (type=gt_right_offroad)`. The car left the lane.
+
+**What actually happens:** a steering limit cycle at 0.51 Hz between the ±0.70 clips, heading
+error ±29°, 0.9 m lateral swings, at 5–6 m/s on R100 — present in **every** G1 recording since
+the 2026-09-26 re-spec made following possible (36 files, |steer| p95 = 0.700 in all, 5 with
+400+ e-stop frames). The planner's reference tracks the true lane centre (perception fine);
+the ACC state toggles at the steering frequency because the yawing ego loses the lead in the
+radar cone (consequence, not cause).
+
+**Counterfactuals (all G1 scenario, 60 s, same day):**
+
+| variant | steer ≥ 0.69 in curves | at-car RMS | e-stop |
+|---|---|---|---|
+| production overlay `acc_hill_highway.yaml` (5 runs) | 20–27 % | 0.24–0.34 | 1/5 |
+| overlay minus `control.lateral` block (5) | 21–25 % | 0.27–0.30 | 0/5 |
+| overlay with ACC disabled, target 5.5 (2) | 35–43 % | 0.48–0.70 | 2/2 |
+| **no overlay at all (2)** | **0 %** | **0.029** | 0 |
+| updated base-track geometry + overlay (2) | 39 % | 0.23–0.25 | 0 |
+| overlay minus `control.longitudinal` (2) | 34–41 % | 0.18–0.28 | 0 |
+| overlay with `accel_tracking_enabled` restored (2) | 37–40 % | 0.16–0.21 | 0 |
+| overlay minus `reference_distractor_*` keys (2) | 43 % | 0.27–0.35 | 1/2 |
+| **overlay with `mpc_leff_estimation_enabled: false` (5)** | **0 %** | **≈0.03** | 0 |
+
+**Mechanism:** `acc_hill_highway.yaml` → `_inherits: mpc_hill_highway.yaml` →
+`trajectory.mpc.mpc_leff_estimation_enabled: true` (6e729ea, 2026-04-03). The base turned the
+RLS wheelbase estimator OFF three days later (8a5c0c5: "unstable on curve transitions") and the
+overlay was never updated. The active lateral controller in hill curves is the **LMPC regime**
+(`control/regime` = 1 on hill_highway in every run — not Pure Pursuit), and with the estimator
+on, `control/mpc_leff_value` pegs at its **8.0 m clamp** through the arcs (true L 2.5 m): the
+model demands ~3× the steering, saturates, and limit-cycles. The lateral sweep never sees it
+(no overlay). Also lateral: `|steer| p95 0.81` > `max_steering 0.7` in several variants — the
+clip is not the last stage (recovery term?) — separate small item.
+
+**Fix (done):** `mpc_hill_highway.yaml` pins the estimator `false` with the history;
+`tests/test_config_overlays_respect_base_safety.py` loads every overlay through the real
+loader and asserts stability-gated keys match the base. **Lesson for the agents:** read the
+`EMERGENCY STOP: <type>` log line before theorising about an e-stop; and a scenario overlay
+inheriting an experimental MPC overlay means the scenario tests a different controller than
+the sweep does. Related: the `radar_fwd_distance_m = 0.0 when undetected` default is a
+provenance smell ([[feedback_field_naming_for_single_writer_provenance]]) but not a safety
+bug — EB and both e-stop paths gate on `detected`.
+
 ### T-GOVERNOR-CURVE-CAP-LATCH — root cause found (2026-10-07); fix kill-switched, A/B pending
 
 **Mechanism (`control/speed_governor.py::_compute_curve_cap_speed`):** on highway_65 the
