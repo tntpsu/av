@@ -30,6 +30,21 @@ Follow it exactly. **Default to `--quick` mode** for the first pass over
 existing recordings. Then in Step 2.5, you may invoke `/e2e` to seed
 fresh recordings for stale or failing scenarios, up to a per-night cap.
 
+**Config-commit staleness check (do this before scoring any `latest_per_track()`
+pick).** A recording's mtime being the newest for its track does NOT mean it
+postdates every relevant commit — confirmed 3x (see
+`feedback_scenario_config_staleness`), most recently 2026-10-09 Night-58 where
+a commit landed only 5 minutes after the "freshest" H2 recording and the gap
+was enough to flip a verdict. Before trusting a quick-pass FAIL/WARN as current
+behavior:
+```bash
+git log -1 --format='%H %ad %s' --date=iso -- config/av_stack_config.yaml config/acc_*.yaml tracks/scenarios/<name>.yml
+```
+If that commit's timestamp is *after* the candidate recording's mtime, don't
+trust the recording — either re-seed fresh via Step 2.5, or if budget-capped,
+read the specific key out of the recording's own `meta/runtime_config_json`
+snapshot and state explicitly in the report that the data predates the fix.
+
 ## Step 2 — Quick-pass evaluation + heartbeat per scenario
 
 ```bash
@@ -298,11 +313,17 @@ memory `feedback_nightly_retro_proposes_into_void`.
   config (the latch that held the ego at target − 0.4 on every highway_65 run is gone). Expect H8/H2/H4
   gap convergence to improve and `speed_governor_curve_cap_active` ≈ 0 % on highway_65 straights; a
   curve-cap latch at 100 % on a straight from now on IS a regression.
-- **Highway ACC overlay 2026-10-09:** `safety.emergency_stop_use_gt_lane_boundaries` is back on for all
-  highway scenarios (had been off since March). A `gt_*_offroad` e-stop on an H scenario is now
-  possible and REAL — read the logged type. The overlay still carries ~148 non-ACC overrides
-  (T-ACC-OVERLAY-STACK); H-scenario lateral RMS (~0.33 m) is not comparable to the sweep's 0.03 m
-  on the same track until that is resolved.
+- **Highway ACC overlay 2026-10-09 (afternoon):** `config/acc_highway.yaml` is now the 8-key
+  minimal overlay (ACC block + scenario speed limits, no `_inherits`). H2–H11 therefore run the
+  PRODUCTION lateral/trajectory stack for the first time since March. Expect at-car lateral RMS
+  ~0.08–0.10 m on highway scenarios (was 0.33–0.40 under the old 149-key stack) and H8 hunting
+  gone (1 engage edge/run). The old stack is archived at `config/legacy/acc_highway_full_2026-03.yaml`;
+  a highway scenario that regresses tonight vs Night-58 is the first fresh signal about a
+  dropped override — name the scenario and the behaviour, do not re-add the override. The base
+  launch defect those overrides masked is fixed (`curvature_source_seed_without_hysteresis`,
+  T-LAUNCH-CURVATURE-SEED). `safety.emergency_stop_use_gt_lane_boundaries` stays ON (base
+  value) — a `gt_*_offroad` e-stop on an H scenario is REAL; read the logged type.
+  Autobahn/hill overlays still inherit `mpc_*.yaml`.
 - **ACC jerk gate 2026-10-07:** `ACC_JERK_P95_GATE_MPS3` 4.0 → 15.0 (emergency 10 → 37.5), PROVISIONAL.
   Measured jerk scales with 1/dt² and the old bar was set on the synthetic clock. Real-clock readings so
   far: H2 7.8, H8 8.4, H4 2.9 m/s³. Report the gate value per scenario each night so the bar can be

@@ -1,6 +1,6 @@
 # AV Stack — Agent Memory: Architecture
 
-**Last updated:** 2026-09-28
+**Last updated:** 2026-10-09
 
 ---
 
@@ -54,6 +54,16 @@ The map and perception serve different, non-overlapping roles:
 Curvature estimation from camera images requires differentiating lane position twice over distance — a second-derivative operation that amplifies noise quadratically. At R15 (κ=0.067), this produces a 91.2% curvature undercall (P50 ratio 0.52) that no amount of model training eliminates. This is a fundamental geometric signal quality limit, not a training shortcoming.
 
 **Corollary:** parameters that depend on curvature (speed cap, MPC feedforward, curve scheduler arming) should use map curvature as their primary source. Perception curvature is suitable only as a fallback when no map is loaded.
+
+**Source selection has memory (`_select_primary_curvature`):** switching between map / GT /
+lane_context needs `curvature_source_switch_on_frames` consecutive frames. The *first*
+selection of a run must not wait for that — with `curvature_source_seed_without_hysteresis`
+(base `true`, 2026-10-09) frame 0 adopts the desired source outright. Before, every run spent
+two frames on the stationary car's perception curvature, which seeded the distance-based
+curvature EMA (`_smooth_path_curvature`, 12 m window) and held the speed governor at 3 m/s
+for ~12 s whenever that seed was large (T-LAUNCH-CURVATURE-SEED). Any new consumer of
+`curvature_primary_abs` with its own state should likewise not trust frames where
+`curvature_selection_reason == "hysteresis_hold"`.
 
 ### What the map enables
 

@@ -1,6 +1,6 @@
 # AV Stack — Agent Memory: Tasks
 
-**Last updated:** 2026-09-22
+**Last updated:** 2026-10-09
 
 ---
 
@@ -547,6 +547,73 @@ March "false stops at low speed" no longer reproduce) and pinned in
 candidate. **Next:** A/B min + `curvature_smoothing_enabled: false` on H2; if that restores
 convergence, fix the start-up freeze in the base (the comfort governor should not hold 3 m/s
 for 90 frames at launch) and adopt the minimal overlay for highway and autobahn.
+
+**Resolved 2026-10-09 (afternoon):** the start-up freeze was found and fixed in the base — see
+T-LAUNCH-CURVATURE-SEED below. With the fix, the minimal overlay matches or beats the full
+overlay on H2 (gap RMSE 19 m startup-inclusive, converges in 15 s, post-conv 3.5 m) and fixes
+H8 outright (engage edges 23 → 1, cone rejects 6 % → 0 %, at-car RMS 0.39 → 0.09 m,
+analyzer 79 → 96–98). `acc_highway.yaml` is now the minimal overlay (the 149-key stack is
+kept in `config/legacy/acc_highway_full_2026-03.yaml` for reference). Autobahn (46 keys,
+`mpc_bias` on) and hill (~20) still inherit — same treatment pending their own A/Bs
+(A1/A2, G1/G2).
+Same-afternoon spot-checks under the minimal overlay: H9 2/2 correct reject (ACC 0 %,
+`wrong_lane` 100 %, 0 e-stops, at-car RMS 0.14 m vs 0.49–0.55 under the old stack);
+H10 2/2 correct reject (ACC 0 %, `out_of_range`/`opposite_direction`, 0 e-stops, RMS 0.14 m);
+H3 2/2 pass (TTC min 6.1 s, 0 collisions, converges 14 s, post-conv RMSE 5.1 m vs 4.6 legacy,
+RMS 0.06–0.08 vs 0.29); H5 2/2 pass (TTC min 2.70 / 2.66 s, 0 collisions, min gap 5.1 m vs
+4.5–4.7 legacy, detection 100 %) — the harness's EMERGENCY_BRAKE prediction did not occur in Unity. `acc_highway_min.yaml` removed (it IS `acc_highway.yaml`).
+
+**Harness side-finding (T-ACC-HARNESS-ACCEL-TRACKING-PLANT):** three `tests/test_acc_closedloop.py`
+tests were calibrated on the legacy stack (H5 night-27 known-good; EQ-bias mechanism) and now pin
+`config/legacy/acc_highway_full_2026-03.yaml` via a `legacy_highway_cfg` fixture. The point-mass
+drag plant (0.10 m/s² per m/s, fitted to the legacy `accel_tracking_enabled: false` law)
+under-drives the production law: modelled ego tops out at 7.9 m/s against a 15 m/s target and
+loses an 8 m/s lead (DETECTION_LOSS) while Unity under the same config holds 12.6–13.2 m/s and
+follows. Strict-xfail reproducer `test_production_law_holds_an_8mps_lead_against_drag`; re-fit the
+plant to the production law (recordings 20261009_1629–1646 are the data), then remove the marker.
+
+### T-LAUNCH-CURVATURE-SEED — first-frame curvature source seeded the governor with a stationary-car perception κ (2026-10-09, FIXED)
+
+**Measurement:** none — the recorded fields were right; this is mechanism.
+
+**Mechanism:** `AVStack._select_primary_curvature` started every run on `lane_context` and
+applied the source-switch hysteresis (`curvature_source_switch_on_frames` = 3) to the very
+first selection, so frames 0–1 ran on the perception curvature of a *stationary* car even
+though the map was already healthy (`selection_reason` = `map_ok` overwritten by
+`hysteresis_hold`; `curvature_map_authority_lost` = 1 for two frames in every recording).
+On a straight that value is junk (0.09–0.17 1/m, R ≈ 6–11 m, on highway_65; 0.011 on the
+production highway_65 run). It seeded `_smooth_path_curvature`'s distance-based EMA
+(window 12 m, min speed 2 m/s), the governor turned it into comfort = 3.0 m/s and curve cap =
+comfort − 0.4, and a car held at 3 m/s crosses the 12 m window slowly — the seed took ~12 s
+to wash out (recorded comfort speed 3.0 / 4.7 / 7.8 / 12.6 m/s at 0 / 5 / 8 / 10 s; a
+distance-EMA replay of the recorded speed trace reproduces the implied κ within 14–30 %,
+pinned in `tests/test_curvature_source_seed.py`). The full ACC overlay hid it by disabling
+both governor caps (comfort/curve cap = −1) — the March "curvature_smoothing freezes the
+comfort governor at 3 m/s for ~90 frames" comment was describing this, and the fix was put in
+the overlay instead of the base. On the production lateral tracks the seed is smaller and the
+speed planner's launch ramp (v ≈ 5.9 m/s at 5 s, 12 m/s at ~11 s) sits below the comfort cap,
+so they only saw the mild form (highway_65 comfort 8.4 m/s for the first seconds).
+
+**Fix:** `trajectory.curvature_source_seed_without_hysteresis` (code default `false` = legacy;
+base YAML `true`): the first selection adopts the desired source outright — there is no
+previous source for the hysteresis to protect; later switches still need N frames.
+
+**A/B (H2, `acc_highway_min.yaml`, 5 pairs, 90 s; arms split by frame-0 source):**
+
+| arm | comfort @2 s | v @5 s | v @10 s | gap converges | gap RMSE (all) | post-conv RMSE | at-car RMS |
+|---|---|---|---|---|---|---|---|
+| legacy | 3.0 m/s | 2.9 | 5.1 | 23.2 s | 41.2 m | 8.6 m | 0.095 m |
+| seed fix | — (none) | 5.4 | 10.0 | 14.7 s | 19.1 m | 3.5 m | 0.080 m |
+
+Every fix run beats every legacy run on every launch column. H8 under min + fix (3 runs):
+1 engage edge, 0 % cone rejects, RMS 0.08–0.10 m, analyzer 96.4 / 98.1 / 98.2.
+highway_65 base-track A/B (5 pairs): see current_state.md 2026-10-09.
+
+**Left open:** (1) the speed planner's own launch ramp (12 m/s at ~11 s ≈ 1.1 m/s² average) is
+the next launch limiter on every track — a legitimate tuning question, not a defect;
+(2) scorer "Oscillation Growth" penalises H8 (Control 85–95) for a 0.01 Hz "oscillation" that
+is the car entering the S-curve from a straight start (RMS 0.001 → 0.29 m) — a measurement
+item, file as T-METRIC-OSC-GROWTH-CURVE-ENTRY.
 
 ### T-ACC-G1-LEFF-OSCILLATION — G1's e-stops were an LMPC limit cycle from a re-enabled RLS estimator (2026-10-07)
 

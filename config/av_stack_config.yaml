@@ -670,6 +670,7 @@ trajectory:
   curvature_smoothing_enabled: true
   curvature_smoothing_window_m: 12.0
   curvature_smoothing_min_speed: 2.0
+  curvature_source_seed_without_hysteresis: true  # 2026-10-09 T-LAUNCH-CURVATURE-SEED: frame 0 adopts the map outright; legacy held lane_context 3 frames and the stationary-car perception κ seeded the curvature EMA (governor held 3 m/s ~12 s)
   straight_speed_smoothing_alpha: 0.2
   straight_speed_smoothing_curvature_threshold: 0.003
   straight_speed_slew_rate_up: 0.4

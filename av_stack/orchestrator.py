@@ -1496,7 +1496,18 @@ class AVStack:
         self._map_segment_lookup_success_count: int = 0
         self._map_odometer_update_count: int = 0
         self._map_odometer_teleport_skip_count: int = 0
-        self._curvature_source_active: str = "lane_context"
+        # First-frame seeding (T-LAUNCH-CURVATURE-SEED, 2026-10-09): legacy started on
+        # lane_context and held it for switch_on_frames even when the map was already
+        # healthy, so the stationary-car perception curvature (R≈11 m on a straight)
+        # seeded the 12 m curvature EMA and the governor held 3 m/s for ~12 s.
+        # With the flag on, the first selection adopts the desired source outright —
+        # there is no previous source for the hysteresis to protect.
+        self._curvature_source_seed_without_hysteresis: bool = bool(
+            trajectory_cfg.get("curvature_source_seed_without_hysteresis", False)
+        )
+        self._curvature_source_active: Optional[str] = (
+            None if self._curvature_source_seed_without_hysteresis else "lane_context"
+        )
         self._curvature_source_candidate: Optional[str] = None
         self._curvature_source_candidate_frames: int = 0
         self._curvature_source_switch_on_frames = max(
@@ -2225,6 +2236,10 @@ class AVStack:
             selection_reason = (
                 "map_untrusted_switch_to_gt" if map_abs is not None else "map_unavailable"
             )
+
+        if self._curvature_source_active is None:
+            # First selection of the run: adopt the desired source without hysteresis.
+            self._curvature_source_active = desired_source
 
         if desired_source != self._curvature_source_active:
             if self._curvature_source_candidate == desired_source:

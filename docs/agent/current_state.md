@@ -1,7 +1,23 @@
 # AV Stack — Agent Memory: Current State
 
-**Last updated:** 2026-10-05
+**Last updated:** 2026-10-09
 **Current milestone:** S2-M1 — **5 of 5 tracks still meeting all-layers-≥95 goal.** ACC emergency brake authority restored on G2 (885 → 2 e-stops, 99.8% reduction) via plan `acc-idm-accel-plumbing.md`. Frenet-frame MPC reference remains in shadow-mode.
+
+## 2026-10-09 — Launch freeze found in the base; ACC highway scenarios now run the production stack
+
+Night-58: 13/14 ACC, H8 the only FAIL (ACC engage/disengage hunting via `out_of_cone_same_lane`
+during the R500 S-curve); lateral sweep clean apart from the known floors. Root cause of H8 and
+of the minimal-overlay slow launch turned out to be one base defect (T-LAUNCH-CURVATURE-SEED):
+the first curvature-source selection honoured switch-on hysteresis, so two frames of a
+stationary car's perception curvature seeded the 12 m curvature EMA and the governor held
+3 m/s for ~12 s. Fix kill-switched (`curvature_source_seed_without_hysteresis`, base `true`).
+H2 A/B 5/5: launch v@10 s 5.1 → 10.0 m/s, gap converges 23 → 15 s, RMSE 41 → 19 m. H8 3/3:
+edges 23 → 1, at-car RMS 0.39 → 0.09 m, analyzer 79 → 96–98. `acc_highway.yaml` is now the
+8-key minimal overlay (full stack archived under `config/legacy/`); autobahn and hill still
+inherit pending their own A/Bs. The overlay stack had cost 0.25–0.30 m of lateral RMS on
+highway_65 and hidden the base defect for seven months.
+Next: autobahn/hill minimal overlays; speed-planner launch ramp; lateral re-base on the at-car
+error (s_loop 0.34 / hairpin 0.58 m RMS remain the structural item).
 
 ## 2026-10-05 — Clock fixed; goldens on the real-time player; first honest comfort numbers
 

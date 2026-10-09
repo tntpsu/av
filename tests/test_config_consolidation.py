@@ -33,15 +33,17 @@ class TestInheritsChain:
 
     def test_inherits_merges_parent_before_child(self):
         """Child keys override parent; parent keys override base."""
-        config = load_config(str(CONFIG_DIR / "acc_highway.yaml"))
-        # acc_highway inherits mpc_highway → should have mpc_highway's curve_intent params
+        # 2026-10-09: acc_highway.yaml no longer inherits (minimal overlay, T-ACC-OVERLAY-STACK);
+        # the archived March stack is the _inherits example now.
+        config = load_config(str(CONFIG_DIR / "legacy" / "acc_highway_full_2026-03.yaml"))
+        # the legacy highway overlay inherits mpc_highway → should have mpc_highway's curve_intent params
         assert config["control"]["lateral"]["curve_intent_arm_distance_min_m"] == 6.0
         # acc_highway overrides pp_feedback_gain (parent doesn't set it)
         assert config["control"]["lateral"]["pp_feedback_gain"] == 0.02
 
     def test_raw_overlay_has_only_child_keys(self):
         """_raw_overlay must contain only the child overlay's keys, not the parent's."""
-        config = load_config(str(CONFIG_DIR / "acc_highway.yaml"))
+        config = load_config(str(CONFIG_DIR / "legacy" / "acc_highway_full_2026-03.yaml"))
         raw = config["_raw_overlay"]
         # acc_highway child sets pp_feedback_gain
         assert raw.get("control", {}).get("lateral", {}).get("pp_feedback_gain") == 0.02

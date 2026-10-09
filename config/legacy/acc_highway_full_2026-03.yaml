@@ -1,0 +1,73 @@
+# ACC highway overlay — inherits mpc_highway.yaml, adds ACC-specific overrides.
+#
+# Enables ACC with wider time-headway for Step 5 E2E scenarios on highway_65.
+# Ego target: 15 m/s (inherited from mpc_highway).
+#
+# Usage:
+#   ./start_av_stack.sh --config config/acc_highway.yaml \
+#       --track-yaml tracks/scenarios/highway_h2_steady.yml --duration 90
+
+_inherits: mpc_highway.yaml
+
+control:
+  lateral:
+    # Position correction for low-speed stop-and-go (auto-derive gives ~0.0 at 15 m/s)
+    pp_feedback_gain: 0.02
+  longitudinal:
+    max_speed: 17.0
+    # ACC overspeed brake — stronger deceleration for stop-and-go following.
+    overspeed_brake_threshold: 0.1
+    overspeed_brake_max: 0.90
+    overspeed_brake_gain: 1.50
+    # Disable accel-tracking PID: ACC updates target_speed, not reference_accel.
+    accel_tracking_enabled: false
+
+trajectory:
+  # Distractor guards: lower speed thresholds for ACC (full-strength at 8-12 m/s following)
+  reference_distractor_guard_speed_on: 3.0
+  reference_distractor_guard_speed_full: 6.0
+  reference_distractor_input_guard_speed_on: 3.0
+  reference_distractor_input_guard_speed_full: 6.0
+  # Disable distance-based EMA curvature smoothing: at v≈0 the EMA decays slowly,
+  # freezing the comfort governor at 3.0 m/s for ~90 frames, blocking ACC engagement.
+  curvature_smoothing_enabled: false
+  speed_planner:
+    # Zero bias so planner targets exactly 15.0 m/s (base has -0.2 → 14.6 → brake wind-up)
+    speed_limit_bias: 0.0
+  mpc:
+    mpc_v_max: 17.0
+
+safety:
+  max_speed: 17.0
+  # 2026-10-09: the GT lane-boundary e-stop is back ON (was disabled since March 2026 for
+  # low-speed false stops). Every highway/autobahn ACC run of 2026-10-01..08 has 0 frames
+  # beyond a lane line at the car (max at-car offset 1.2 m vs 1.8 m half-lane), so the gate
+  # costs nothing and a scenario overlay must not disable a safety gate (guard test).
+  emergency_stop_use_gt_lane_boundaries: true
+  # Raise OOB threshold: lead vehicle at 1.8m offset biases perception lane center
+  # by ~1.0-1.4m right. GT cross-track=0 but perceived lat_err reaches -1.9m.
+  allowed_outside_lane: 3.5
+
+# ── ACC: enabled for all highway scenarios ────────────────────────────────────
+acc:
+  enabled: true
+  gap_alpha: 0.30
+  rate_alpha: 0.20
+  target_gap_time_headway_s: 2.5  # Increased 1.5→2.5: stop-and-go needs early IDM braking
+  min_gap_s0_m: 2.0
+  idm_max_accel_mps2: 2.0
+  idm_comfortable_decel_mps2: 2.5
+  cutout_speed_mps: 0.05  # Stop-and-go: IDM equilibrium at 3m gap = 0.40 m/s > 0.05
+  fallback_frames: 5
+  reengage_frames: 3
+  disengage_ramp_mps2: 2.0
+  detection_range_m: 150.0
+
+stack:
+  sync_packet_mode: packet_fifo_active
+  sync_packet_active_allow_legacy_fallback: true
+  sync_packet_consume_policy: freshest_within_budget
+  sync_packet_payload_max_age_ms: 250.0
+  sync_packet_payload_warn_age_ms: 125.0
+  sync_packet_payload_max_drain_count: 128
+  sync_packet_payload_allow_stale_debug: false

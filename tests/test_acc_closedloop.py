@@ -91,6 +91,16 @@ def highway_cfg() -> dict:
     return load_scenario_config("config/acc_highway.yaml")
 
 
+@pytest.fixture(scope="module")
+def legacy_highway_cfg() -> dict:
+    """The 149-key March-2026 highway stack every pre-2026-10-09 H-scenario ran on
+    (`accel_tracking_enabled: false`, strong overspeed brake, governor caps off).
+    The harness's known-good H5 point (night 27) and the EQ-bias mechanism were
+    observed under THIS stack, so the calibration/mechanism tests pin it; the
+    production tests use `highway_cfg` (now the 8-key minimal overlay)."""
+    return load_scenario_config("config/legacy/acc_highway_full_2026-03.yaml")
+
+
 def _legacy_cfg(cfg: dict) -> dict:
     """Config as it stood before 2026-09-22 for the SENSOR: no radar range offset."""
     import copy
@@ -131,9 +141,9 @@ class TestHarnessCalibration:
         build_acc_controller(hill_cfg)
         build_longitudinal_controller(hill_cfg)
 
-    def test_h5_stop_go_matches_sweep_pass(self, highway_cfg):
-        """Known-GOOD: H5 scored PASS 100.0 on night 27.  The harness must agree."""
-        r = run_h5_stop_go(_legacy_cfg(highway_cfg))
+    def test_h5_stop_go_matches_sweep_pass(self, legacy_highway_cfg):
+        """Known-GOOD: H5 scored PASS 100.0 on night 27 (legacy overlay stack).  The harness must agree."""
+        r = run_h5_stop_go(_legacy_cfg(legacy_highway_cfg))
         assert r.frames_in(*ESTOP_STATES) == 0, r.summary()
         assert not r.collided, r.summary()
         assert r.ttc_min_acc_active() >= TTC_GATE_S, r.summary()
@@ -492,12 +502,12 @@ class TestRadarFrame:
         assert all(v < RADAR_RANGE_OFFSET_MEASURED_M for v in thresholds.values()), thresholds
         assert reg.ACC_RADAR_RANGE_OFFSET_M == pytest.approx(hill_cfg["acc"]["radar_range_offset_m"])
 
-    def test_h5_legacy_pass_hid_a_half_metre_true_margin(self, highway_cfg):
+    def test_h5_legacy_pass_hid_a_half_metre_true_margin(self, legacy_highway_cfg):
         """The sweep scored H5 PASS 100.0 with a reported minimum gap of ~5.8 m.
         In the legacy frame that is ~0.5 m bumper-to-bumper — which is why the
         2026-09-09 H5 run physically contacted the lead (6615 override frames) and
         was still reported as 0 collisions."""
-        r = run_h5_stop_go(_legacy_cfg(highway_cfg))
+        r = run_h5_stop_go(_legacy_cfg(legacy_highway_cfg))
         assert not r.collided, r.summary()
         assert r.min_gap() > 4.0, r.summary()          # what the sweep saw
         assert r.min_true_gap() < 1.0, r.summary()     # what was physically there
@@ -528,15 +538,31 @@ class TestEquilibriumBiasRouting:
         p = cfg["acc"]; vv = float(v[m].mean()); eq = (p["min_gap_s0_m"] + vv * p["target_gap_time_headway_s"]) / (1 - (vv / 15.0) ** 4) ** 0.5
         return float(np.median(gap[m]) - eq), float(np.median(ts[m] - v[m])), r
 
-    def test_decel_only_routing_parks_above_equilibrium(self, highway_cfg):
-        bias, lead, _ = self._bias(highway_cfg, route_positive=False)
+    def test_decel_only_routing_parks_above_equilibrium(self, legacy_highway_cfg):
+        bias, lead, _ = self._bias(legacy_highway_cfg, route_positive=False)
         assert bias > 2.0, f"expected the legacy bias with a resistive plant, got {bias:+.1f} m"
         assert lead > 1.0, f"expected the ACC target to lead the ego, got {lead:+.2f} m/s"
 
-    def test_both_sign_routing_removes_the_bias(self, highway_cfg):
-        bias, _, r = self._bias(highway_cfg, route_positive=True)
+    def test_both_sign_routing_removes_the_bias(self, legacy_highway_cfg):
+        bias, _, r = self._bias(legacy_highway_cfg, route_positive=True)
         assert abs(bias) < 1.0, f"bias {bias:+.1f} m with positive routing"
         assert not r.collided and r.frames_in(*ESTOP_STATES) == 0
+
+    @pytest.mark.xfail(
+        strict=True,
+        reason="T-ACC-HARNESS-ACCEL-TRACKING-PLANT: the drag plant (0.10 m/s^2 per m/s) was fitted "
+               "to the legacy longitudinal law; under the production law (accel_tracking_enabled) "
+               "the modelled ego tops out at ~7.9 m/s vs a 15 m/s target and loses the 8 m/s lead "
+               "(DETECTION_LOSS), while Unity H2 under the same production config holds 12.6-13.2 m/s "
+               "and follows (2026-10-09 A/B). Re-fit the plant to the production law; "
+               "remove this marker when the ego holds the lead.",
+    )
+    def test_production_law_holds_an_8mps_lead_against_drag(self, highway_cfg):
+        """Production stack + resistive plant must still FOLLOW (ACC active in the last 100 s)."""
+        import numpy as np
+        _, _, r = self._bias(highway_cfg, route_positive=False)
+        tr = r.trace; act = np.array(tr["acc_active"]) > 0.5; t = np.array(tr["t"])
+        assert act[t > 100].mean() > 0.9, r.summary()
 
     def test_production_config_carries_the_kill_switch(self, highway_cfg, hill_cfg):
         """Off after the 2026-09-26 Unity A/Bs (H5, G1): the routed command reached
