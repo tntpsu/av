@@ -614,6 +614,10 @@ the next launch limiter on every track — a legitimate tuning question, not a d
 (2) scorer "Oscillation Growth" penalises H8 (Control 85–95) for a 0.01 Hz "oscillation" that
 is the car entering the S-curve from a straight start (RMS 0.001 → 0.29 m) — a measurement
 item, file as T-METRIC-OSC-GROWTH-CURVE-ENTRY.
+(3) Daytime 6-track sweep after the fix (2026-10-09 17:37–17:45): highway_65 99.3 / hairpin_15 59.0 /
+sweeping_highway 98.0 (Traj 92.8 — second independent reading < 95) / mixed_radius 98.6 /
+hill_highway 99.2 — all within 0.6 of baseline, 0 e-stops; s_loop 94.4 vs 79.0 is the
+critical-layer-yellow cap releasing (Traj 79.6 → 80.4, at-car RMSE 0.343 → 0.339 m), not a change.
 
 ### T-ACC-G1-LEFF-OSCILLATION — G1's e-stops were an LMPC limit cycle from a re-enabled RLS estimator (2026-10-07)
 

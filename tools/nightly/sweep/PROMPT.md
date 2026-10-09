@@ -202,3 +202,11 @@ Verified cost: the acc-sweep job did exactly this on four consecutive nights
   they cannot have changed. Only flag a diagnostic if it is (a) new this run or
   (b) measurably worse than a prior sweep's same recording. This mistake occurred
   7 times (nights 4, 29, 37, 47, 52, 53, 57) before this rule was added.
+
+- **s_loop overall is bistable at the Trajectory-80 cap (2026-10-09):** overall is capped at 79
+  whenever a critical layer is yellow (< 80). s_loop's golden sits at Trajectory 79.6 (overall 79.0);
+  a fresh run at Trajectory 80.4 scores 94.4 with identical driving (at-car RMSE 0.343 vs 0.339 m).
+  A ±15 s_loop delta with Trajectory within ±1 of 80 is the cap releasing/engaging, NOT a system
+  change — report the Trajectory score and the at-car RMSE, and do not count it as WORST_DELTA
+  or as an improvement. Also 2026-10-09: sweeping_highway Trajectory 92.8 on a fresh daytime run
+  (nightly 94.0) — two independent readings below 95; treat as a standing flag, not variance.
