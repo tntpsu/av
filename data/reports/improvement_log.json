@@ -1,18 +1,18 @@
 [
   {
     "date": "2026-04-05",
-    "commit_summary": "MPC reference alignment \u2014 e_lat uses lookahead GT reference",
+    "commit_summary": "MPC reference alignment — e_lat uses lookahead GT reference",
     "issue": "MPC optimized at-car closest-point cross-track while scoring measured lookahead-based lateral_error. On curves these diverge by P50=0.413m, causing MPC to oscillate against a misaligned reference.",
-    "deduction_eliminated": "Mixed track +17.6 pts (79\u219296.6). Curve oscillation penalty eliminated. Lateral RMSE deduction reduced on all MPC-active tracks.",
+    "deduction_eliminated": "Mixed track +17.6 pts (79→96.6). Curve oscillation penalty eliminated. Lateral RMSE deduction reduced on all MPC-active tracks.",
     "tracks_affected": [
       "mixed_radius",
       "s_loop",
       "highway",
       "sweeping"
     ],
-    "root_cause": "MPC e_lat input used gt_cross_track (closest-point at car) instead of gt_cross_track_lookahead_m (PP-style reference used by scoring). On curves these references diverge \u2014 MPC corrected toward a different target than what was being scored.",
+    "root_cause": "MPC e_lat input used gt_cross_track (closest-point at car) instead of gt_cross_track_lookahead_m (PP-style reference used by scoring). On curves these references diverge — MPC corrected toward a different target than what was being scored.",
     "process_stage": "design",
-    "process_sub": "signal routing \u2014 at-car vs lookahead reference frame mismatch",
+    "process_sub": "signal routing — at-car vs lookahead reference frame mismatch",
     "prevention": "Contract test: assert correlation(mpc_e_lat, -lateral_error) > 0.95 on any curve segment. Would have caught the -0.71 correlation immediately.",
     "detection_method": "mpc_pipeline_analysis correlation diagnostic showed mpc_e_lat vs lateral_error correlation = -0.71 on curves",
     "detection_delay_iterations": 5
@@ -20,31 +20,31 @@
   {
     "date": "2026-04-05",
     "commit_summary": "Lateral accel budget regime selector replaces 6 proxy params",
-    "issue": "MPC\u2194PP regime decisions used 6 proxy parameters (speed threshold, curvature guard, per-track mpc_min_speed_mps overrides). These proxies approximated whether MPC could track safely but failed at boundary cases where speed and curvature interact (e.g., braking into tight curves drops v\u00b2 as \u03ba rises).",
-    "deduction_eliminated": "Mixed +15.3 pts (79\u219294.3). Eliminated 3 per-track overlay workarounds. Sloop +0.4 pts.",
+    "issue": "MPC↔PP regime decisions used 6 proxy parameters (speed threshold, curvature guard, per-track mpc_min_speed_mps overrides). These proxies approximated whether MPC could track safely but failed at boundary cases where speed and curvature interact (e.g., braking into tight curves drops v² as κ rises).",
+    "deduction_eliminated": "Mixed +15.3 pts (79→94.3). Eliminated 3 per-track overlay workarounds. Sloop +0.4 pts.",
     "tracks_affected": [
       "mixed_radius",
       "s_loop",
       "hairpin"
     ],
-    "root_cause": "Speed threshold and curvature guard were independent proxies for tire-grip feasibility. \u03ba\u00d7v\u00b2 is the actual physics quantity \u2014 a single threshold (1.5 m/s\u00b2) replaces both with correct interaction. Per-track overrides were band-aids for the proxy failures.",
+    "root_cause": "Speed threshold and curvature guard were independent proxies for tire-grip feasibility. κ×v² is the actual physics quantity — a single threshold (1.5 m/s²) replaces both with correct interaction. Per-track overrides were band-aids for the proxy failures.",
     "process_stage": "design",
-    "process_sub": "proxy approximation \u2014 independent speed/curvature thresholds instead of unified physics budget",
-    "prevention": "Start from physics model (lateral accel = \u03ba\u00d7v\u00b2) when designing regime boundaries. Require dimensional analysis review for any multi-variable threshold.",
-    "detection_method": "Counterfactual analysis: mixed_radius R40 corner had actual \u03ba=0.017 (not 0.025 from geometry) because MPC tracks wider arc. Budget correctly kept MPC active.",
+    "process_sub": "proxy approximation — independent speed/curvature thresholds instead of unified physics budget",
+    "prevention": "Start from physics model (lateral accel = κ×v²) when designing regime boundaries. Require dimensional analysis review for any multi-variable threshold.",
+    "detection_method": "Counterfactual analysis: mixed_radius R40 corner had actual κ=0.017 (not 0.025 from geometry) because MPC tracks wider arc. Budget correctly kept MPC active.",
     "detection_delay_iterations": 3
   },
   {
     "date": "2026-04-04",
-    "commit_summary": "Phase-gated map FF \u2014 suppress straight FF, boost entry FF",
-    "issue": "Preview-curvature FF was always active on looped tracks (preview \u03ba always visible). On STRAIGHT segments between curves, constant FF fought the centering correction, causing steering jerk. Control layer scored 80 on s_loop.",
-    "deduction_eliminated": "S_loop control layer 80\u2192100 (+20 pts). Overall s_loop 93.7\u219296.6.",
+    "commit_summary": "Phase-gated map FF — suppress straight FF, boost entry FF",
+    "issue": "Preview-curvature FF was always active on looped tracks (preview κ always visible). On STRAIGHT segments between curves, constant FF fought the centering correction, causing steering jerk. Control layer scored 80 on s_loop.",
+    "deduction_eliminated": "S_loop control layer 80→100 (+20 pts). Overall s_loop 93.7→96.6.",
     "tracks_affected": [
       "s_loop"
     ],
     "root_cause": "Map preview FF used a global gain with no phase awareness. On looped tracks the preview curvature is always nonzero (next curve visible), so FF drove steering even on straight segments where centering should dominate.",
     "process_stage": "design",
-    "process_sub": "missing state machine \u2014 continuous FF on discrete driving phases",
+    "process_sub": "missing state machine — continuous FF on discrete driving phases",
     "prevention": "Phase-gate all feedforward terms by default. FF should only be active in the driving phase where it adds value (ENTRY/SUSTAIN), not globally.",
     "detection_method": "Steering jerk trace showed periodic FF/centering oscillation on straight segments. Disabling map FF on straights eliminated the jerk.",
     "detection_delay_iterations": 2
@@ -52,71 +52,71 @@
   {
     "date": "2026-04-05",
     "commit_summary": "Regime blend asymmetry fix + Stanley speed threshold",
-    "issue": "When transitioning FROM Stanley/MPC back TO Pure Pursuit, no blend was applied \u2014 PP as the base controller had no transition smoothing. This caused a 46.3 steering jerk spike on sloop at the Stanley\u2192PP handoff. Also Stanley was active at 5.0 m/s during curve braking dips, causing wider tracking.",
-    "deduction_eliminated": "Sloop +3.6 pts (94.3\u219297.9). Mixed +15.6 pts (79\u219294.6). Steering jerk deduction eliminated at regime transitions.",
+    "issue": "When transitioning FROM Stanley/MPC back TO Pure Pursuit, no blend was applied — PP as the base controller had no transition smoothing. This caused a 46.3 steering jerk spike on sloop at the Stanley→PP handoff. Also Stanley was active at 5.0 m/s during curve braking dips, causing wider tracking.",
+    "deduction_eliminated": "Sloop +3.6 pts (94.3→97.9). Mixed +15.6 pts (79→94.6). Steering jerk deduction eliminated at regime transitions.",
     "tracks_affected": [
       "s_loop",
       "mixed_radius"
     ],
     "root_cause": "Blend logic only smoothed transitions TO higher-authority controllers. Return-to-PP path had no _last_regime_steering tracking, so PP steering jumped instantly. Stanley active at 5 m/s meant it engaged during curve-entry braking, widening the tracking arc.",
     "process_stage": "implementation",
-    "process_sub": "asymmetric transition handling \u2014 blend logic missing for return-to-base path",
-    "prevention": "Test all regime transition directions (A\u2192B AND B\u2192A) for steering discontinuity. Regression test: max |\u0394steering| at any regime transition < threshold.",
-    "detection_method": "Steering jerk trace showed 46.3 spike at frame ~145 coinciding with Stanley\u2192PP handoff",
+    "process_sub": "asymmetric transition handling — blend logic missing for return-to-base path",
+    "prevention": "Test all regime transition directions (A→B AND B→A) for steering discontinuity. Regression test: max |Δsteering| at any regime transition < threshold.",
+    "detection_method": "Steering jerk trace showed 46.3 spike at frame ~145 coinciding with Stanley→PP handoff",
     "detection_delay_iterations": 2
   },
   {
     "date": "2026-04-01",
-    "commit_summary": "Inter-frame control extrapolation \u2014 decouple MPC from camera rate",
-    "issue": "Camera pipeline delivers at 7.5 Hz (132ms gaps). Smith predictor delay overshoots 4\u00d7 (266ms vs designed 66ms). MPC corrections reinforce error 80% of the time, causing growing oscillation Q1=0.007m \u2192 Q4=0.408m RMSE over 100s.",
-    "deduction_eliminated": "Highway straight+MPC RMSE 0.146\u21920.025m. Oscillation growth slope 0.0047\u21920.0013 m/s (72% reduction). Score to 97.3.",
+    "commit_summary": "Inter-frame control extrapolation — decouple MPC from camera rate",
+    "issue": "Camera pipeline delivers at 7.5 Hz (132ms gaps). Smith predictor delay overshoots 4× (266ms vs designed 66ms). MPC corrections reinforce error 80% of the time, causing growing oscillation Q1=0.007m → Q4=0.408m RMSE over 100s.",
+    "deduction_eliminated": "Highway straight+MPC RMSE 0.146→0.025m. Oscillation growth slope 0.0047→0.0013 m/s (72% reduction). Score to 97.3.",
     "tracks_affected": [
       "highway",
       "s_loop",
       "sweeping"
     ],
-    "root_cause": "MPC designed for 30+ Hz updates but camera only delivers at 7.5 Hz. Smith predictor assumed 66ms delay but actual delay was 266ms (4\u00d7), creating positive feedback. No intermediate updates between camera frames.",
+    "root_cause": "MPC designed for 30+ Hz updates but camera only delivers at 7.5 Hz. Smith predictor assumed 66ms delay but actual delay was 266ms (4×), creating positive feedback. No intermediate updates between camera frames.",
     "process_stage": "design",
-    "process_sub": "temporal coupling \u2014 control rate coupled to perception rate",
+    "process_sub": "temporal coupling — control rate coupled to perception rate",
     "prevention": "Design control and perception as independent rate domains from the start. Assert control update rate >= minimum Hz in acceptance tests.",
     "detection_method": "analyze_oscillation_root_cause.py showed quartile-over-quartile RMSE growth with 0.18 Hz oscillation frequency matching the Smith predictor overshoot cycle",
     "detection_delay_iterations": 4
   },
   {
     "date": "2026-03-31",
-    "commit_summary": "LMPC oscillation fix \u2014 dual-mechanism rate + gain reduction",
-    "issue": "LMPC oscillated at speeds >= 14 m/s. Bicycle model gain v/L increases linearly with speed while MPC r_steer_rate was fixed \u2014 at 14 m/s the loop gain crossed the stability boundary.",
+    "commit_summary": "LMPC oscillation fix — dual-mechanism rate + gain reduction",
+    "issue": "LMPC oscillated at speeds >= 14 m/s. Bicycle model gain v/L increases linearly with speed while MPC r_steer_rate was fixed — at 14 m/s the loop gain crossed the stability boundary.",
     "deduction_eliminated": "Highway straight+MPC P50 oscillation eliminated (0.003m). Highway 97.5, autobahn 96.4.",
     "tracks_affected": [
       "highway",
       "autobahn"
     ],
-    "root_cause": "r_steer_rate was a fixed constant but the plant gain (v/L in bicycle model) grows linearly with speed. At 14 m/s the open-loop gain crossed unity \u2192 instability. Needed speed-scheduled damping.",
+    "root_cause": "r_steer_rate was a fixed constant but the plant gain (v/L in bicycle model) grows linearly with speed. At 14 m/s the open-loop gain crossed unity → instability. Needed speed-scheduled damping.",
     "process_stage": "design",
-    "process_sub": "missing physics model \u2014 fixed damping on speed-varying plant gain",
-    "prevention": "Stability analysis: compute gain margin vs speed for any fixed-parameter MPC. Flag when plant gain variation exceeds 2\u00d7 across operating envelope.",
+    "process_sub": "missing physics model — fixed damping on speed-varying plant gain",
+    "prevention": "Stability analysis: compute gain margin vs speed for any fixed-parameter MPC. Flag when plant gain variation exceeds 2× across operating envelope.",
     "detection_method": "analyze_oscillation_root_cause.py showed amplitude growth correlated with speed. Root cause confirmed by computing v/L gain crossover.",
     "detection_delay_iterations": 3
   },
   {
     "date": "2026-03-22",
-    "commit_summary": "Bridge frame-drop regression \u2014 targetFPS 13\u219215 + persistent executor",
-    "issue": "All hill_highway recordings had 2-4 false teleport-guard fires per run, forcing MPC\u2192PP reset at high speed and causing artifact-driven lateral oscillation. Three A/B tests measured artifact behavior, not real dynamics \u2014 all invalid.",
+    "commit_summary": "Bridge frame-drop regression — targetFPS 13→15 + persistent executor",
+    "issue": "All hill_highway recordings had 2-4 false teleport-guard fires per run, forcing MPC→PP reset at high speed and causing artifact-driven lateral oscillation. Three A/B tests measured artifact behavior, not real dynamics — all invalid.",
     "deduction_eliminated": "Hill highway score recovered from artifact-corrupted runs. Eliminated false teleport-guard fires (forced_pp_transition_count: 0).",
     "tracks_affected": [
       "hill_highway"
     ],
-    "root_cause": "Two compounding bugs: (1) targetFPS changed 15\u219213 which doesn't divide cleanly into Unity 60Hz physics tick, producing occasional 2-frame gaps. (2) Per-frame ThreadPoolExecutor context manager added 20-80ms variable latency. Combined gap exceeded 2.0m teleport threshold.",
+    "root_cause": "Two compounding bugs: (1) targetFPS changed 15→13 which doesn't divide cleanly into Unity 60Hz physics tick, producing occasional 2-frame gaps. (2) Per-frame ThreadPoolExecutor context manager added 20-80ms variable latency. Combined gap exceeded 2.0m teleport threshold.",
     "process_stage": "implementation",
-    "process_sub": "timing regression \u2014 FPS change + per-frame thread pool creation",
-    "prevention": "CI gate: assert forced_pp_transition_count == 0 on every recording. Assert frame interval P95 < 2\u00d7 expected interval.",
+    "process_sub": "timing regression — FPS change + per-frame thread pool creation",
+    "prevention": "CI gate: assert forced_pp_transition_count == 0 on every recording. Assert frame interval P95 < 2× expected interval.",
     "detection_method": "teleport_jump_m HDF5 field showed jumps near 2.0m threshold. Bisection to commit 08eda7f identified the FPS change.",
     "detection_delay_iterations": 3
   },
   {
     "date": "2026-04-06",
-    "commit_summary": "Proportional curve anticipation \u2014 local_gate_weight replacing EMA state gates",
-    "issue": "Curve anticipation used binary EMA state gates (ON/OFF) on a continuous curvature signal. Transitions were all-or-nothing \u2014 either full anticipation or none \u2014 causing late turn-in on gradual curve entries and over-anticipation on exits.",
+    "commit_summary": "Proportional curve anticipation — local_gate_weight replacing EMA state gates",
+    "issue": "Curve anticipation used binary EMA state gates (ON/OFF) on a continuous curvature signal. Transitions were all-or-nothing — either full anticipation or none — causing late turn-in on gradual curve entries and over-anticipation on exits.",
     "deduction_eliminated": "C1 late turn-in Trajectory deduction reduced. Smoother curve entry steering profile.",
     "tracks_affected": [
       "mixed_radius",
@@ -125,7 +125,7 @@
     ],
     "root_cause": "Binary state gates discretized a continuous signal. local_gate_weight provides proportional response that scales with actual curvature magnitude, eliminating the threshold-crossing discontinuity.",
     "process_stage": "design",
-    "process_sub": "state discretization \u2014 binary gates on continuous signal",
+    "process_sub": "state discretization — binary gates on continuous signal",
     "prevention": "Design review: any time a continuous signal is gated by a binary threshold, require justification for why proportional scaling was rejected.",
     "detection_method": "Curve phase decomposition showed entry transients dominated by gate activation delay, not controller tracking error",
     "detection_delay_iterations": 3
@@ -143,14 +143,14 @@
     ],
     "root_cause": "Speed table was a discrete proxy for the continuous physics relationship between speed, curvature, and minimum safe lookahead. Table entries only covered tested speeds; interpolation between points was linear but the physics is nonlinear.",
     "process_stage": "design",
-    "process_sub": "proxy approximation \u2014 speed proxy for curvature",
+    "process_sub": "proxy approximation — speed proxy for curvature",
     "prevention": "When a parameter depends on vehicle dynamics, derive the formula from physics first. Use tables only as overrides for empirical corrections.",
-    "detection_method": "Trace tool showed floor rescue activating at wrong speeds \u2014 physics formula derived and validated immediately",
+    "detection_method": "Trace tool showed floor rescue activating at wrong speeds — physics formula derived and validated immediately",
     "detection_delay_iterations": 0
   },
   {
     "date": "2026-04-06",
-    "commit_summary": "Time-based entry term \u2014 speed-adaptive arm replacing distance threshold",
+    "commit_summary": "Time-based entry term — speed-adaptive arm replacing distance threshold",
     "issue": "Curve entry anticipation used a fixed distance threshold to arm the entry term. At different speeds, the same distance corresponds to very different time-to-curve values, making anticipation too early at low speed and too late at high speed.",
     "deduction_eliminated": "Entry timing now consistent across speed range. Reduced C1 late turn-in at higher speeds.",
     "tracks_affected": [
@@ -160,14 +160,14 @@
     ],
     "root_cause": "Distance threshold was a proxy for time-to-curve. At 6 m/s, 30m = 5s of anticipation (too early); at 12 m/s, 30m = 2.5s (about right). Speed-adaptive arm converts distance to time, giving consistent anticipation window.",
     "process_stage": "design",
-    "process_sub": "fixed threshold \u2014 distance proxy for time",
+    "process_sub": "fixed threshold — distance proxy for time",
     "prevention": "For any distance-based threshold in a speed-varying system, require time-domain analysis. If the behavior should be time-invariant, use time directly.",
     "detection_method": "Per-speed-band analysis showed entry term activating 5s early at low speed but only 2.5s at high speed",
     "detection_delay_iterations": 1
   },
   {
     "date": "2026-04-06",
-    "commit_summary": "Far preview isolation \u2014 term_time leak fix",
+    "commit_summary": "Far preview isolation — term_time leak fix",
     "issue": "term_time (time-based entry anticipation) was computed using far preview curvature but leaked into the global steering path, affecting non-entry segments. This caused subtle steering bias on straight segments following curve exits.",
     "deduction_eliminated": "Eliminated spurious steering bias on post-curve straights. Reduced control jerk at curve exit.",
     "tracks_affected": [
@@ -177,7 +177,7 @@
     ],
     "root_cause": "term_time was computed and added to the steering command globally. It should have been isolated to the entry phase only, gated by the same phase state machine that controls other anticipation terms.",
     "process_stage": "implementation",
-    "process_sub": "signal routing \u2014 term_time leaked to global path",
+    "process_sub": "signal routing — term_time leaked to global path",
     "prevention": "Each steering term should have explicit phase gating. Code review: verify that any new steering term is only active in its intended driving phase.",
     "detection_method": "Steering decomposition trace showed nonzero term_time contribution on straight segments where it should be zero",
     "detection_delay_iterations": 1
@@ -185,8 +185,8 @@
   {
     "date": "2026-04-10",
     "commit_summary": "feat: pre-computed velocity profile (fc78ad8) + activate with tracking budget (c93f800)",
-    "issue": "Reactive speed planning collapsed spatial curvature into single scalar \u2014 could not reason about curve sequences, braking distances, or distinguish near vs far curves. Caused premature deceleration on hairpin straights (frame 332 cascade) and required ~29 heuristic tuning params.",
-    "deduction_eliminated": "Architecture foundation \u2014 no direct scoring change at 0.05g (profile is not yet the binding constraint). Eliminates structural cause of hairpin preview saturation. Validated 7/7 tracks with 0 e-stops, 0 OOL.",
+    "issue": "Reactive speed planning collapsed spatial curvature into single scalar — could not reason about curve sequences, braking distances, or distinguish near vs far curves. Caused premature deceleration on hairpin straights (frame 332 cascade) and required ~29 heuristic tuning params.",
+    "deduction_eliminated": "Architecture foundation — no direct scoring change at 0.05g (profile is not yet the binding constraint). Eliminates structural cause of hairpin preview saturation. Validated 7/7 tracks with 0 e-stops, 0 OOL.",
     "tracks_affected": [
       "s_loop",
       "highway_65",
@@ -196,36 +196,36 @@
       "sweeping_highway",
       "hairpin_15"
     ],
-    "root_cause": "Speed planning architecture used per-frame scalar reductions (curvature_preview_abs \u2192 max() \u2192 anticipation_score \u2192 distance_weight \u2192 speed target), losing all spatial structure. Industry standard is forward+backward velocity profile over full reference path.",
+    "root_cause": "Speed planning architecture used per-frame scalar reductions (curvature_preview_abs → max() → anticipation_score → distance_weight → speed target), losing all spatial structure. Industry standard is forward+backward velocity profile over full reference path.",
     "process_stage": "design",
     "process_sub": "design/proxy-approximation",
     "prevention": "Architecture review against industry standard (Waymo/Apollo velocity profiling) before building reactive chain. Physics-first design rule: if the quantity is a spatial function, don't collapse it to a scalar.",
-    "detection_method": "Architecture analysis \u2014 hairpin failure cascade traced to scalar collapse of spatial curvature function. Calibration data (3298 curve frames) used to derive a_lat_tracking_budget_g=0.05.",
+    "detection_method": "Architecture analysis — hairpin failure cascade traced to scalar collapse of spatial curvature function. Calibration data (3298 curve frames) used to derive a_lat_tracking_budget_g=0.05.",
     "detection_delay_iterations": 2
   },
   {
     "date": "2026-04-17",
-    "commit_summary": "Revert mpc_q_lat base 2.0\u21921.0 \u2014 undocumented tuning bundled in 41148f3 caused highway_65 59.0 regression",
-    "issue": "Undocumented 2\u00d7 doubling of MPC lateral weight (mpc_q_lat base 1.0\u21922.0) was bundled into commit 41148f3 (named '\u03bav\u00b2 safety fade') and mirrored in 6dbdacc's _MPC_WEIGHT_AUTO_DERIVE_PARAMS. Caused MPC oversteer (command/actual 4.7\u00d7) and oscillation runaway (0.008\u21921.114m) on mild highway curves. Commit explicitly said 'E2E validation DEFERRED'; only unit tests run before merge.",
-    "deduction_eliminated": "+82.5 points total across 4 tracks: highway_65 +40.5 (59.0\u219299.5), hill_highway +38.6 (59.0\u219297.6), s_loop +2.3, mixed_radius +1.1",
+    "commit_summary": "Revert mpc_q_lat base 2.0→1.0 — undocumented tuning bundled in 41148f3 caused highway_65 59.0 regression",
+    "issue": "Undocumented 2× doubling of MPC lateral weight (mpc_q_lat base 1.0→2.0) was bundled into commit 41148f3 (named 'κv² safety fade') and mirrored in 6dbdacc's _MPC_WEIGHT_AUTO_DERIVE_PARAMS. Caused MPC oversteer (command/actual 4.7×) and oscillation runaway (0.008→1.114m) on mild highway curves. Commit explicitly said 'E2E validation DEFERRED'; only unit tests run before merge.",
+    "deduction_eliminated": "+82.5 points total across 4 tracks: highway_65 +40.5 (59.0→99.5), hill_highway +38.6 (59.0→97.6), s_loop +2.3, mixed_radius +1.1",
     "tracks_affected": [
       "highway_65",
       "hill_highway",
       "mixed_radius",
       "s_loop"
     ],
-    "root_cause": "Feature commit 41148f3 bundled an unrelated 2-line tuning change (mpc_q_lat base 1.0\u21922.0, max cap 4.0\u21922.5) with the \u03bav\u00b2 safety fade feature. The commit message did not mention the tuning change, had a misleading inline comment 'base=2.0 validated' (only unit-test validated), and explicitly deferred E2E validation. No gate prevented the merge.",
+    "root_cause": "Feature commit 41148f3 bundled an unrelated 2-line tuning change (mpc_q_lat base 1.0→2.0, max cap 4.0→2.5) with the κv² safety fade feature. The commit message did not mention the tuning change, had a misleading inline comment 'base=2.0 validated' (only unit-test validated), and explicitly deferred E2E validation. No gate prevented the merge.",
     "process_stage": "testing",
     "process_sub": "testing/missing-coverage",
     "prevention": "Add a pre-merge rule: any diff touching _MPC_WEIGHT_AUTO_DERIVE_PARAMS or config/av_stack_config.yaml tuning keys requires an E2E validation record (minimum 60s run on highway_65 + one curve-heavy track). Also consider a pre-commit hook that detects numeric constant changes in tuning files and requires explicit --e2e-validated flag in the commit message.",
-    "detection_method": "/iterate skill \u2014 bisect via /e2e at intermediate commits (3 runs), then git diff inspection revealed bundled q_lat change; scope-creep guard 8e caught attempted revert as too large, forcing targeted tuning-only fix",
+    "detection_method": "/iterate skill — bisect via /e2e at intermediate commits (3 runs), then git diff inspection revealed bundled q_lat change; scope-creep guard 8e caught attempted revert as too large, forcing targeted tuning-only fix",
     "detection_delay_iterations": 1
   },
   {
     "date": "2026-04-17",
-    "commit_summary": "Reject implausible GT lane boundaries in OOL detection (hairpin_15 79.0\u219295.8)",
-    "issue": "tools/drive_summary_core.py OOL mask trusted Unity GT boundaries blindly. At track-wrap mesh seams, gt_left/gt_right can jump to \u00b11500m garbage values. The analyzer counted these as real sustained OOL events (error value 1842m), inflating Safety penalty and triggering critical_yellow_layer cap. An existing 'track-end note' at analyze_drive_overall.py:2550-2563 printed a cosmetic warning but did NOT exclude the corrupt frames from the score.",
-    "deduction_eliminated": "Hairpin_15 Safety 75 \u2192 100 (+25), OOL events 1 \u2192 0, cap released, overall score 79.0 \u2192 95.8 (+16.8). Four other tracks unchanged (GT was clean in those runs). Architectural robustness: any future track with simulator mesh seams or failed-loop issues is now protected.",
+    "commit_summary": "Reject implausible GT lane boundaries in OOL detection (hairpin_15 79.0→95.8)",
+    "issue": "tools/drive_summary_core.py OOL mask trusted Unity GT boundaries blindly. At track-wrap mesh seams, gt_left/gt_right can jump to ±1500m garbage values. The analyzer counted these as real sustained OOL events (error value 1842m), inflating Safety penalty and triggering critical_yellow_layer cap. An existing 'track-end note' at analyze_drive_overall.py:2550-2563 printed a cosmetic warning but did NOT exclude the corrupt frames from the score.",
+    "deduction_eliminated": "Hairpin_15 Safety 75 → 100 (+25), OOL events 1 → 0, cap released, overall score 79.0 → 95.8 (+16.8). Four other tracks unchanged (GT was clean in those runs). Architectural robustness: any future track with simulator mesh seams or failed-loop issues is now protected.",
     "tracks_affected": [
       "hairpin_15"
     ],
@@ -233,7 +233,7 @@
     "process_stage": "tooling",
     "process_sub": "tooling/missing-detection",
     "prevention": "Audit all sensor/GT inputs used in safety-scoring pipeline for plausibility filters. Pattern: any signal derived from simulator mesh geometry needs explicit range validation before entering scoring logic. Add a pre-commit or CI check that grep'ing for `~((gt_left <= 0) & (0 <= gt_right))` also shows a plausibility filter in the same function.",
-    "detection_method": "PhilViz triage-report API at /api/recording/.../issues surfaced `out_of_lane: max_error: 1842.964m, source: ground_truth_boundaries` \u2014 the 1842m value is physically impossible and pointed directly at GT corruption. Also surfaced by direct HDF5 inspection showing gt_left/gt_right jump at frame 1873 of hairpin recording.",
+    "detection_method": "PhilViz triage-report API at /api/recording/.../issues surfaced `out_of_lane: max_error: 1842.964m, source: ground_truth_boundaries` — the 1842m value is physically impossible and pointed directly at GT corruption. Also surfaced by direct HDF5 inspection showing gt_left/gt_right jump at frame 1873 of hairpin recording.",
     "detection_delay_iterations": 2
   },
   {
@@ -290,8 +290,8 @@
   },
   {
     "date": "2026-09-28",
-    "commit_summary": "561df49 fix(config): speed_drag_gain derive-table base 0.035 \u2192 0.0 to match T-ACC-DRAG removal",
-    "issue": "e3474e2 zeroed control.longitudinal.speed_drag_gain in the base config but the orchestrator's _SPEED_CONTROL_SCALING_PARAMS table still carried 0.035; tests/test_auto_derive_curvature.py::test_speed_control_params_exist_in_base_config was REAL_BREAK for two nights and the nightly agent read it as 'the removal was silently undone'. Recording snapshots show 0.0 ran \u2014 the table never overrode the explicit key.",
+    "commit_summary": "561df49 fix(config): speed_drag_gain derive-table base 0.035 → 0.0 to match T-ACC-DRAG removal",
+    "issue": "e3474e2 zeroed control.longitudinal.speed_drag_gain in the base config but the orchestrator's _SPEED_CONTROL_SCALING_PARAMS table still carried 0.035; tests/test_auto_derive_curvature.py::test_speed_control_params_exist_in_base_config was REAL_BREAK for two nights and the nightly agent read it as 'the removal was silently undone'. Recording snapshots show 0.0 ran — the table never overrode the explicit key.",
     "deduction_eliminated": "none (test consistency); prevented a false 'fix undone' diagnosis from steering the next ACC A/B",
     "tracks_affected": [
       "highway_65",
@@ -308,8 +308,8 @@
   {
     "date": "2026-09-28",
     "commit_summary": "ea2b92b feat(scoring): grade lateral error at the car, not at the lookahead reference point",
-    "issue": "control/lateral_error is ref_x \u2014 the trajectory reference point's vehicle-frame offset 3.7\u20137.2 m ahead (= d_at_car + Ld\u00b7sin \u03c8 + \u00bdLd\u00b2\u03ba). Every lateral RMSE/P95, the 0.40 m comfort gate, out-of-lane, centered %, the apex/late-turn-in classifier and every A/B graded it. Against Unity's at-car road-frame cross-track (fiducial-verified) it over-reported gentle curves 2\u20135\u00d7 (hill_highway 0.192 vs 0.033) and UNDER-reported tight ones (s_loop 0.116 vs 0.345, hairpin_15 0.173 vs 0.600). Months of curve tuning, the 'PP ceiling' and the CURVATURE_FLOOR_COEFF proxy were aimed at measurement geometry.",
-    "deduction_eliminated": "hill_highway Trajectory penalty 30 (cap) \u2192 ~1 on the April golden; sweeping_highway Traj 92.9 \u2192 95.4 (passes); s_loop 99.1 \u2192 79.0 and hairpin 98.7 \u2192 59.0 (honesty, not regression \u2014 strict xfail via GOLDEN_BELOW_FLOOR)",
+    "issue": "control/lateral_error is ref_x — the trajectory reference point's vehicle-frame offset 3.7–7.2 m ahead (= d_at_car + Ld·sin ψ + ½Ld²κ). Every lateral RMSE/P95, the 0.40 m comfort gate, out-of-lane, centered %, the apex/late-turn-in classifier and every A/B graded it. Against Unity's at-car road-frame cross-track (fiducial-verified) it over-reported gentle curves 2–5× (hill_highway 0.192 vs 0.033) and UNDER-reported tight ones (s_loop 0.116 vs 0.345, hairpin_15 0.173 vs 0.600). Months of curve tuning, the 'PP ceiling' and the CURVATURE_FLOOR_COEFF proxy were aimed at measurement geometry.",
+    "deduction_eliminated": "hill_highway Trajectory penalty 30 (cap) → ~1 on the April golden; sweeping_highway Traj 92.9 → 95.4 (passes); s_loop 99.1 → 79.0 and hairpin 98.7 → 59.0 (honesty, not regression — strict xfail via GOLDEN_BELOW_FLOOR)",
     "tracks_affected": [
       "s_loop",
       "hairpin_15",
@@ -322,7 +322,28 @@
     "process_stage": "requirements",
     "process_sub": "requirements/wrong-metric",
     "prevention": "Every scored quantity names its frame and reference point in scoring_registry; any 'floor' or 'unavoidable error' constant in the scorer must cite the physics (a measurement artifact is a metric bug, not a floor). Cross-check scored error against an independent ground truth (fiducials) when registering goldens.",
-    "detection_method": "A/B on pp_map_ff_wheelbase_m: steering changed 25%, in-curve error did not move at all \u2192 decomposed control/lateral_error against mpc_gt_cross_track_at_car_m and the lane-line fiducials",
+    "detection_method": "A/B on pp_map_ff_wheelbase_m: steering changed 25%, in-curve error did not move at all → decomposed control/lateral_error against mpc_gt_cross_track_at_car_m and the lane-line fiducials",
     "detection_delay_iterations": 1
+  },
+  {
+    "date": "2026-10-09",
+    "commit_summary": "64d08d9 fix(trajectory): seed the curvature source without hysteresis; highway ACC runs the production stack",
+    "issue": "AVStack._select_primary_curvature started on lane_context and applied the 3-frame switch-on hysteresis to the FIRST selection, so frames 0-1 of every run used the perception curvature of a stationary car (0.09-0.17 1/m on a straight) while the map was already healthy. That junk seeded the 12 m distance-based curvature EMA; the speed governor turned it into comfort = 3.0 m/s and curve cap = comfort - 0.4, and a car held at 3 m/s crosses the window slowly, so launch was frozen for ~12 s. Hidden since March because acc_highway.yaml (149 inherited non-ACC keys) disabled both governor caps and curvature smoothing instead of fixing the base.",
+    "deduction_eliminated": "H8 FAIL -> PASS (engage edges 23 -> 1, cone rejects 6 -> 0 %, at-car RMS 0.39 -> 0.09 m, analyzer 79 -> 96-98); H2 under the minimal overlay gap RMSE 41 -> 19 m, converges 23 -> 15 s. Highway ACC scenarios now measure the production stack (lateral 0.33-0.40 -> 0.08-0.14 m). highway_65 base track unchanged (planner ramp below the comfort cap).",
+    "tracks_affected": [
+      "highway_h2_steady",
+      "highway_h8_curve_catchup",
+      "highway_h3_hard_brake",
+      "highway_h5_stop_go",
+      "highway_h9_adjacent_lane_parallel_reject",
+      "highway_h10_oncoming_straight_reject",
+      "all tracks (mild form at launch)"
+    ],
+    "root_cause": "State-machine initialisation: hysteresis meant to stop source chatter was applied when there was no previous source to protect, and a stateful downstream filter (distance EMA) trusted its first sample. Compounded by a process defect: the March overlay worked around the symptom (caps off) in a scenario config rather than root-causing it in the base, which both hid the defect and made every ACC scenario run a different stack from the sweep.",
+    "process_stage": "design",
+    "process_sub": "design/state-discretization",
+    "prevention": "Rule: a hysteresis/debounce gate must bypass on first selection (no prior state); stateful consumers of curvature_primary_abs must ignore hysteresis_hold frames (architecture.md). Rule already in CLAUDE.md but violated in March: never fix a base behaviour in a scenario overlay; tests/test_config_overlays_respect_base_safety.py now exists and the highway overlay is minimal, so an overlay-vs-base divergence shows up as a config diff. Diagnostic that found it in minutes: print the first 12 frames of curvature_primary_source / curvature_selection_reason / speed_governor_comfort_speed / active_limiter at launch.",
+    "detection_method": "Launch-profile dump of the H2 minimal-overlay A/B recordings (comfort speed decaying as a distance-EMA of a frame-0 spike), then reading _select_primary_curvature; decay physics confirmed by replaying the recorded speed trace through trajectory.utils.smooth_curvature_distance (tests/test_curvature_source_seed.py)",
+    "detection_delay_iterations": 2
   }
 ]
