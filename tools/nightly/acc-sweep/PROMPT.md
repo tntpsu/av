@@ -294,6 +294,15 @@ memory `feedback_nightly_retro_proposes_into_void`.
   report-only and expected. Do not call this a regression; compare only against nights ≥ 2026-10-05 or
   against re-scored older recordings (the scorer is era-aware: it uses unity_time whenever present).
 - `RECORDINGS_PRUNE` lines and 45 MB camera-strided recordings are normal (retention + stride, 2026-10-01).
+- **Governor 2026-10-09:** `trajectory.speed_governor.curve_cap_only_when_binding: true` is now in the base
+  config (the latch that held the ego at target − 0.4 on every highway_65 run is gone). Expect H8/H2/H4
+  gap convergence to improve and `speed_governor_curve_cap_active` ≈ 0 % on highway_65 straights; a
+  curve-cap latch at 100 % on a straight from now on IS a regression.
+- **Highway ACC overlay 2026-10-09:** `safety.emergency_stop_use_gt_lane_boundaries` is back on for all
+  highway scenarios (had been off since March). A `gt_*_offroad` e-stop on an H scenario is now
+  possible and REAL — read the logged type. The overlay still carries ~148 non-ACC overrides
+  (T-ACC-OVERLAY-STACK); H-scenario lateral RMS (~0.33 m) is not comparable to the sweep's 0.03 m
+  on the same track until that is resolved.
 - **ACC jerk gate 2026-10-07:** `ACC_JERK_P95_GATE_MPS3` 4.0 → 15.0 (emergency 10 → 37.5), PROVISIONAL.
   Measured jerk scales with 1/dt² and the old bar was set on the synthetic clock. Real-clock readings so
   far: H2 7.8, H8 8.4, H4 2.9 m/s³. Report the gate value per scenario each night so the bar can be

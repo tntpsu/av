@@ -24,6 +24,7 @@ from av_stack.config import load_config  # noqa: E402
 # key path → value the base pins for stability (and why)
 STABILITY_GATED = {
     ("trajectory", "mpc", "mpc_leff_estimation_enabled"): (False, "RLS L_eff estimator unstable on curve transitions (base 8a5c0c5); pegged at 8 m on G1"),
+    ("safety", "emergency_stop_use_gt_lane_boundaries"): (True, "a scenario overlay must not disable the off-road e-stop (acc_highway.yaml had it off since March 2026; re-enabled 2026-10-09)"),
 }
 
 OVERLAYS = sorted(p for p in glob.glob(str(REPO_ROOT / "config" / "*.yaml")) if Path(p).name != "av_stack_config.yaml")

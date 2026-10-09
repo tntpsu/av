@@ -505,6 +505,49 @@ Step 2 (after a week of numbers): promote to a Trajectory-layer deduction or a
 that is a scoring change → baseline re-freeze per protocol. Until then the
 sweep prints it and must not gate on it.
 
+### T-ACC-OVERLAY-STACK — scenario overlays run a different stack than the sweep (2026-10-09)
+
+Fully merged (`av_stack.config.load_config`, `_inherits` included) vs base:
+`acc_highway.yaml` differs in **149 non-ACC keys** (via `mpc_highway.yaml`), `acc_autobahn.yaml`
+in 46, `acc_hill_highway.yaml` in ~20 (one of which was the G1 limit cycle). Highway list
+includes: `mpc_bias_enabled` on (base off), `curvature_smoothing_enabled` off, two
+distractor-guard stacks + preactivation/shadow-promote layers the base does not have,
+`stack.sync_packet_mode packet_fifo_active` (base `packet_shadow`), lateral `pp_feedback_gain`
+0.075→0.02 and curve-intent retunes, `accel_tracking_enabled` off, and the safety gate
+**`emergency_stop_use_gt_lane_boundaries: false` + `allowed_outside_lane: 3.5`** — the off-road
+e-stop is disabled for all 10 highway ACC scenarios. Every override carries a March-2026
+rationale (false e-stops at low speed, lead biasing perception) — workarounds for problems
+the stack may no longer have. Consequence: ACC scenario results do not measure the production
+controller, and lateral on H2/H3/H4/H7/H8 shows 0.8–1.2 m at-car excursions where the sweep's
+highway_65 never exceeds 0.12 m. Re-enabling the GT e-stop is free: 0 frames beyond a lane
+line in any highway/autobahn run of the last week.
+
+**A/B 2026-10-09 (H2, 5 pairs each, 90 s):**
+
+| overlay | at-car lateral RMS / max | post-conv gap RMSE / bias | ACC | e-stop |
+|---|---|---|---|---|
+| full `acc_highway.yaml` (149 keys) | 0.330 / 0.91 m | 2.7 / +1.4 m | 99 % | 0 |
+| `acc_highway_min.yaml` (8 keys) | **0.089 / 0.20 m** | 9.5–10.4 / +2…+11 m | 98–99 % | 0 |
+| min + the 4 ACC-motivated longitudinal keys | 0.095 / 0.20 m | 12.7 m | 100 % | 0 |
+
+So the overlay stack costs **0.25 m of lateral RMS on highway_65** (sweep territory is 0.03),
+but it also carries something the gap convergence needs — and it is NOT the longitudinal
+block. Start-up profile: full overlay reaches 10.9 m/s at 10 s, minimal only 6.9 m/s → the
+lead pulls to ~105 m instead of ~75 m and the 90 s window never finishes converging (the
+end-of-run bias is +0.2 m, i.e. the steady state is fine). Prime suspect:
+`trajectory.curvature_smoothing_enabled: false` (its comment: "at v≈0 the EMA decays slowly,
+freezing the comfort governor at 3.0 m/s for ~90 frames, blocking ACC engagement") — a
+start-up limiter in the BASE config, i.e. the real defect is probably in the base, not the
+overlay. Secondary: `speed_planner.speed_limit_bias 0.0`.
+
+**Done 2026-10-09:** `emergency_stop_use_gt_lane_boundaries` back to `true` in
+`acc_highway.yaml` (0 frames beyond a lane line in any Oct-01..08 highway/autobahn run; the
+March "false stops at low speed" no longer reproduce) and pinned in
+`tests/test_config_overlays_respect_base_safety.py`. `acc_highway_min.yaml` kept as the
+candidate. **Next:** A/B min + `curvature_smoothing_enabled: false` on H2; if that restores
+convergence, fix the start-up freeze in the base (the comfort governor should not hold 3 m/s
+for 90 frames at launch) and adopt the minimal overlay for highway and autobahn.
+
 ### T-ACC-G1-LEFF-OSCILLATION — G1's e-stops were an LMPC limit cycle from a re-enabled RLS estimator (2026-10-07)
 
 **What the nightly reported (wrong):** "false emergency stop — radar gap defaults to 0.0 when
@@ -565,6 +608,12 @@ That is why the nightlies saw "11.6 one night, 14.6 another": it is target − 0
 the ego 0.4 m/s under its target → below a 12 m/s lead → the gap grows to the 150 m radar
 edge (H2/H4) or never closes (H8 0 % ACC active). The comfort-speed "1374 m/s spike" is a
 separate start-up artefact (`comfort_speed` = −1 / 1374) and is NOT the cause.
+
+**Promoted 2026-10-09** (`trajectory.speed_governor.curve_cap_only_when_binding: true`) after
+two 5-pair A/Bs: highway_65 lateral — cap active 100 % → 0 %, ego 11.25 → 11.64 m/s
+(v/allowed 0.94 → 0.97), at-car RMSE 0.030 → 0.036, Traj 98.5 → 98.2, 0 e-stops; H2 ACC —
+post-conv gap RMSE 2.5 → 2.0 m, bias +1.3 → +1.0, ACC 99 → 100 %, 0 e-stops. H8/H2/H4 at a
+12 m/s target are the scenarios that should flip; watch the next nightly.
 
 **Fix (physics-first, no tuning):** `curve_cap_only_when_binding` — the cap is applied only
 when `v_entry − margin < target`; otherwise inactive with reason `not_binding`. Reason label

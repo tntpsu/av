@@ -653,5 +653,63 @@
     ],
     "superseded_by": null,
     "resolved_by": null
+  },
+  {
+    "date": "2026-10-09",
+    "target_metric": "speed_governor curve-cap latch / ego speed on straights",
+    "target_track": "highway_65",
+    "approach": "run_ab_batch trajectory.speed_governor.curve_cap_only_when_binding false vs true, 5 pairs x 60 s (lateral track, no ACC).",
+    "fix_level": "CODE (kill-switched) + CONFIG",
+    "hypothesis": "cap = min(target, v_entry) - margin pins ego at target-0.4 whenever preview kappa >= 0.002; binding-only check should free the ego without lateral cost.",
+    "outcome": "IMPROVEMENT",
+    "outcome_status": "CONFIRMED (H2 half done)",
+    "metric_before": 11.25,
+    "metric_after": 11.64,
+    "root_cause_of_failure": null,
+    "root_cause_detail": "curve_cap_active 100% -> 0%; ego median 11.25 -> 11.64 m/s; v/allowed 0.94 -> 0.97; at-car RMSE 0.030 -> 0.036, Traj 98.5 -> 98.2, Ctrl 100 -> 98.5 (noise-level), 0 e-stops both arms.",
+    "iterations_spent": 1,
+    "files_changed": [],
+    "superseded_by": null,
+    "resolved_by": null
+  },
+  {
+    "date": "2026-10-09",
+    "target_metric": "ACC gap convergence / no-regression under governor binding-only cap",
+    "target_track": "highway_h2_steady",
+    "approach": "run_ab_batch trajectory.speed_governor.curve_cap_only_when_binding false vs true, 5 pairs x 90 s with config/acc_highway.yaml; ACC arms scored manually (post-conv gap RMSE vs IDM equilibrium, bias, ACC active, TTC, at-car lateral, e-stops).",
+    "fix_level": "CODE (kill-switched) + CONFIG",
+    "hypothesis": "Removing the non-binding cap must not regress ACC following; at target 15 the cap (14.6) was not binding on H2 so expect parity.",
+    "outcome": "NO_REGRESSION",
+    "outcome_status": "CONFIRMED",
+    "metric_before": 2.5,
+    "metric_after": 2.0,
+    "root_cause_of_failure": null,
+    "root_cause_detail": "post-conv gap RMSE 2.5 -> 2.0 m, standing bias +1.3 -> +1.0 m, ACC active 99 -> 100%, TTC min ~49 -> ~41 s (both far above gate), at-car RMS 0.348 -> 0.344, 0 e-stops both. Together with the highway_65 lateral A/B (cap 100% -> 0%, ego 11.25 -> 11.64) this promotes the flag.",
+    "iterations_spent": 1,
+    "files_changed": [],
+    "superseded_by": null,
+    "resolved_by": null
+  },
+  {
+    "date": "2026-10-09",
+    "target_metric": "H2 lateral + ACC gap under minimal scenario overlay",
+    "target_track": "highway_h2_steady",
+    "approach": "acc_highway.yaml (149 non-ACC keys via _inherits mpc_highway) vs acc_highway_min.yaml (ACC block + speed limits), then min vs min+4 longitudinal keys; 5 pairs each, 90 s.",
+    "fix_level": "CONFIG (overlay)",
+    "hypothesis": "The inherited MPC/trajectory stack degrades lateral on H scenarios (G1 pattern) and is not needed for ACC.",
+    "outcome": "MIXED",
+    "outcome_status": "OPEN",
+    "metric_before": 0.33,
+    "metric_after": 0.089,
+    "root_cause_of_failure": null,
+    "root_cause_detail": "Lateral: at-car RMS 0.330 -> 0.089 m, max 0.91 -> 0.20 (overlay stack costs 0.25 m RMS on highway). ACC: post-conv gap RMSE 2.7 -> 9.5-10.4 m because the minimal overlay launches slower (v@10s 6.9 vs 10.9 m/s -> lead pulls to ~105 m vs ~75 m; steady-state bias +0.2 OK). Adding the 4 longitudinal keys did not help (12.7). Prime suspect curvature_smoothing_enabled=false (start-up comfort-governor freeze at 3 m/s) -> likely a BASE defect. GT off-road e-stop re-enabled in acc_highway.yaml (0 frames beyond lane line Oct 1-8).",
+    "iterations_spent": 2,
+    "files_changed": [
+      "config/acc_highway.yaml",
+      "config/acc_highway_min.yaml",
+      "tests/test_config_overlays_respect_base_safety.py"
+    ],
+    "superseded_by": null,
+    "resolved_by": null
   }
 ]

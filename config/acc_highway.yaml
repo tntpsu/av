@@ -39,9 +39,11 @@ trajectory:
 
 safety:
   max_speed: 17.0
-  # Disable GT lane-boundary check: at low ACC speeds heading oscillates during
-  # stop-and-go, projecting road center off-center and triggering false e-stops.
-  emergency_stop_use_gt_lane_boundaries: false
+  # 2026-10-09: the GT lane-boundary e-stop is back ON (was disabled since March 2026 for
+  # low-speed false stops). Every highway/autobahn ACC run of 2026-10-01..08 has 0 frames
+  # beyond a lane line at the car (max at-car offset 1.2 m vs 1.8 m half-lane), so the gate
+  # costs nothing and a scenario overlay must not disable a safety gate (guard test).
+  emergency_stop_use_gt_lane_boundaries: true
   # Raise OOB threshold: lead vehicle at 1.8m offset biases perception lane center
   # by ~1.0-1.4m right. GT cross-track=0 but perceived lat_err reaches -1.9m.
   allowed_outside_lane: 3.5

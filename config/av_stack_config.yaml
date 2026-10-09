@@ -854,8 +854,8 @@ trajectory:
     # T-GOVERNOR-CURVE-CAP-LATCH 2026-10-07: false = legacy `min(target, v_entry) − margin` even when the
     # curve allows far more than the target (highway_65 R500 κ 0.002 ≥ curvature_min → cap = target − 0.4
     # for whole runs, starving ACC on H2/H4/H8). true = cap only when v_entry − margin < target.
-    # Kill-switch; flip to true after the highway_65 A/B (≥5 runs).
-    curve_cap_only_when_binding: false
+    # Kill-switch (false = legacy). Promoted to true 2026-10-09 (two 5-pair A/Bs, see T-GOVERNOR-CURVE-CAP-LATCH).
+    curve_cap_only_when_binding: true    # promoted 2026-10-09 after A/B: highway_65 cap 100%→0%, ego 11.25→11.64, lateral unchanged; H2 gap RMSE 2.5→2.0, 0 e-stops
     curve_cap_curvature_min: 0.002
     curve_cap_rise_min: 0.0005
     curve_cap_peak_lat_accel_g: 0.26
