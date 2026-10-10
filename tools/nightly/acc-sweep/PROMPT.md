@@ -323,7 +323,12 @@ memory `feedback_nightly_retro_proposes_into_void`.
   launch defect those overrides masked is fixed (`curvature_source_seed_without_hysteresis`,
   T-LAUNCH-CURVATURE-SEED). `safety.emergency_stop_use_gt_lane_boundaries` stays ON (base
   value) — a `gt_*_offroad` e-stop on an H scenario is REAL; read the logged type.
-  Autobahn/hill overlays still inherit `mpc_*.yaml`.
+  **Same evening: `acc_hill_highway.yaml` and `acc_autobahn.yaml` are minimal too** (archives in
+  `config/legacy/`). Expected under the production stack (3 daytime runs each): G1 post-conv gap
+  RMSE 8.6–9.7 m with bias ≈ +6.5 m (gate ≤ 10 — close; was +1.8 with the old overlay's
+  `accel_tracking_enabled: false`, a T-ACC-EQ-BIAS routing item, NOT a reason to re-add the key);
+  G2 TTC min ≈ 2.2 s (gate 2.0; was 2.4–2.5); A1 RMSE 3–4 m; A2 TTC ≈ 14 s. A G1 reading just over
+  10 m or a G2 TTC of 2.0–2.1 is this known margin loss — report it as such, flag it, do not tune.
 - **ACC jerk gate 2026-10-07:** `ACC_JERK_P95_GATE_MPS3` 4.0 → 15.0 (emergency 10 → 37.5), PROVISIONAL.
   Measured jerk scales with 1/dt² and the old bar was set on the synthetic clock. Real-clock readings so
   far: H2 7.8, H8 8.4, H4 2.9 m/s³. Report the gate value per scenario each night so the bar can be

@@ -572,6 +572,25 @@ loses an 8 m/s lead (DETECTION_LOSS) while Unity under the same config holds 12.
 follows. Strict-xfail reproducer `test_production_law_holds_an_8mps_lead_against_drag`; re-fit the
 plant to the production law (recordings 20261009_1629–1646 are the data), then remove the marker.
 
+**Hill and autobahn adopted the same evening (2026-10-09, 22:25–22:55, 3 runs each, production stack):**
+
+| scenario | full overlay (history) | minimal overlay | verdict |
+|---|---|---|---|
+| G1 grade following | ACC 100 %, RMS 0.024–0.029 m (estimator off), post-conv gap RMSE 3.9–5.3 / bias +1.4…+2.4 m | ACC 98–100 %, RMS 0.023–0.030 m, **RMSE 8.6–9.7 / bias +6.1…+6.9 m** | PASS (gate ≤ 10 m) — bias tripled, see below |
+| G2 stop on grade | TTC min 2.4–2.5 s, 0 collisions | TTC min **2.2 s ×3**, 0 collisions, clean stop | PASS (gate 2.0) — 0.2 s less margin |
+| A1 steady 25 m/s spec | ACC 100 %, RMSE 2.1–2.5 / +0.5, RMS 0.06–0.09 | ACC 100 %, RMSE 3.1–3.8 / +0.7…+1.5, RMS 0.063 | PASS — equivalent |
+| A2 hard brake | TTC 15, Δsteer ≪ 0.10, RMSE 3.8–5.3 | TTC 14.2–14.5, Δsteer 0.011–0.013, jerk p95 2.6–3.1, RMSE 5.7–7.1 | PASS — equivalent |
+
+The one longitudinal key both old overlays carried, `accel_tracking_enabled: false`, is what the
+G1/G2 deltas trace to (harness bisect: it alone moves modelled G2 TTC 1.6 → 2.2 s; the smoothing
+alpha and the lateral retune do nothing). It is NOT re-added: with ACC active the accel-tracking PID
+and IDM's accel are two owners of the same command, which is the T-ACC-EQ-BIAS routing seam and the
+speed-owner consolidation design item — fix it in the base. Note A1/A2 run at a median 11.6 m/s
+(the A1 lead was re-specced to 12 m/s in September) in the LMPC regime 98–99 % of the time; the
+archived autobahn NMPC retune was never exercised by these scenarios. The perception-horizon
+guardrail stays off ONLY in `acc_autobahn.yaml`, declared as the scenario's speed premise.
+Archived: `config/legacy/acc_{highway,autobahn,hill_highway}_full_2026-03.yaml`.
+
 ### T-LAUNCH-CURVATURE-SEED — first-frame curvature source seeded the governor with a stationary-car perception κ (2026-10-09, FIXED)
 
 **Measurement:** none — the recorded fields were right; this is mechanism.

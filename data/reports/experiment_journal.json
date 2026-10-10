@@ -756,5 +756,30 @@
   ],
   "superseded_by": null,
   "resolved_by": null
+ },
+ {
+  "date": "2026-10-09",
+  "target_metric": "Hill and autobahn ACC scenarios run the production stack",
+  "target_track": "hill_g1/g2, autobahn_a1/a2",
+  "approach": "Same recipe as highway: minimal overlay (ACC block + scenario speed keys), 3 Unity runs per scenario vs full-overlay history; harness bisect of the longitudinal deltas.",
+  "fix_level": "CONFIG (overlay)",
+  "hypothesis": "Nothing in the inherited mpc_hill_highway / mpc_autobahn stacks is needed for ACC; any delta is a base item.",
+  "outcome": "SUCCESS",
+  "outcome_status": "RESOLVED",
+  "metric_before": null,
+  "metric_after": null,
+  "root_cause_of_failure": null,
+  "root_cause_detail": "All 12 runs pass their headers. G1: ACC 98-100 %, RMS 0.023-0.030, gap RMSE 8.6-9.7 / bias +6.1..+6.9 (was 3.9-5.3 / +1.4..+2.4). G2: TTC 2.2 x3 (was 2.4-2.5), clean stops. A1: RMSE 3.1-3.8 (was 2.1-2.5). A2: TTC 14.2-14.5, dsteer 0.011-0.013, jerk p95 2.6-3.1. Harness bisect: accel_tracking_enabled alone moves modelled G2 TTC 1.6 -> 2.2; the key is the ACC<->longitudinal routing seam (T-ACC-EQ-BIAS) and stays OUT of the overlays. Harness dynamics tests repinned to config/legacy via legacy_hill_cfg; production G2 TTC test is a strict xfail (plant fitted to the legacy law: 1.6 s modelled vs 2.2 s Unity). A1/A2 run at 11.6 m/s in LMPC 98-99 % -- the archived NMPC retune was never exercised.",
+  "iterations_spent": 1,
+  "files_changed": [
+   "config/acc_hill_highway.yaml",
+   "config/acc_autobahn.yaml",
+   "config/legacy/",
+   "tests/test_acc_closedloop.py",
+   "tests/test_config_consolidation.py",
+   "tools/nightly/acc-sweep/PROMPT.md"
+  ],
+  "superseded_by": null,
+  "resolved_by": null
  }
 ]

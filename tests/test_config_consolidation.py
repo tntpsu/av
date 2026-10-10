@@ -51,8 +51,9 @@ class TestInheritsChain:
         assert "curve_intent_arm_distance_min_m" not in raw.get("control", {}).get("lateral", {})
 
     def test_inherits_autobahn_chain(self):
-        """acc_autobahn inherits mpc_autobahn: NMPC enabled via parent."""
-        config = load_config(str(CONFIG_DIR / "acc_autobahn.yaml"))
+        """The archived autobahn ACC stack inherits mpc_autobahn: NMPC enabled via parent.
+        (acc_autobahn.yaml itself is a minimal overlay with no _inherits since 2026-10-09.)"""
+        config = load_config(str(CONFIG_DIR / "legacy" / "acc_autobahn_full_2026-03.yaml"))
         nmpc = config.get("trajectory", {}).get("nmpc", {})
         assert nmpc.get("nmpc_enabled") is True
         assert nmpc.get("nmpc_horizon") == 20

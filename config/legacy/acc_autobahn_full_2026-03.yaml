@@ -1,0 +1,63 @@
+# ACC autobahn overlay — inherits mpc_autobahn.yaml, adds ACC-specific overrides.
+#
+# ACC + NMPC coexistence: IDM speed commands flow through speed governor → NMPC
+# receives adjusted_target_speed. At 25 m/s the NMPC controller is active.
+#
+# Usage:
+#   ./start_av_stack.sh --config config/acc_autobahn.yaml \
+#       --track-yaml tracks/scenarios/autobahn_a1_steady.yml --duration 120
+
+_inherits: mpc_autobahn.yaml
+
+control:
+  lateral:
+    # Curve intent overrides for ACC (longer hold times for following stability)
+    curve_intent_rearm_exit_hysteresis: 3.0
+    curve_intent_rearm_min_frames: 15
+    curve_intent_max_commit_frames: 120
+    curve_intent_force_straight_hold_frames: 30
+  longitudinal:
+    max_speed: 30.0
+    # Disable accel-tracking PID: ACC updates target_speed, not reference_accel.
+    accel_tracking_enabled: false
+
+trajectory:
+  # Distractor guards: lower speed thresholds for ACC (full-strength at following speeds)
+  reference_distractor_guard_speed_on: 3.0
+  reference_distractor_guard_speed_full: 6.0
+  reference_distractor_input_guard_speed_on: 3.0
+  reference_distractor_input_guard_speed_full: 6.0
+  speed_governor:
+    # Disable horizon guardrail: base config caps at ~15 m/s via perception-horizon;
+    # at 25 m/s target this blocks ACC. NMPC + IDM provide adequate safety.
+    speed_horizon_guardrail_enabled: false
+  mpc:
+    mpc_v_max: 30.0
+    # Bias tuning differs from parent (gentler for ACC stability)
+    mpc_bias_alpha: 0.003
+    mpc_bias_kappa_gain: 0.010
+    mpc_bias_min_speed: 8.0
+    mpc_r_steer_rate: 1.5
+  nmpc:
+    nmpc_max_accel_mps2: 3.0
+    nmpc_max_decel_mps2: 4.0
+    nmpc_max_steer_rate: 0.30
+    nmpc_v_max: 30.0
+
+safety:
+  max_speed: 28.0
+
+# ── ACC: enabled for autobahn scenarios ───────────────────────────────────────
+acc:
+  enabled: true
+  gap_alpha: 0.30
+  rate_alpha: 0.20
+  target_gap_time_headway_s: 1.5
+  min_gap_s0_m: 2.0
+  idm_max_accel_mps2: 2.0
+  idm_comfortable_decel_mps2: 2.5
+  cutout_speed_mps: 5.0
+  fallback_frames: 5
+  reengage_frames: 3
+  disengage_ramp_mps2: 2.0
+  detection_range_m: 60.0

@@ -16,6 +16,12 @@ edges 23 → 1, at-car RMS 0.39 → 0.09 m, analyzer 79 → 96–98. `acc_highwa
 8-key minimal overlay (full stack archived under `config/legacy/`); autobahn and hill still
 inherit pending their own A/Bs. The overlay stack had cost 0.25–0.30 m of lateral RMS on
 highway_65 and hidden the base defect for seven months.
+**Evening:** hill and autobahn overlays made minimal too (3 runs each): G1/G2, A1/A2 all pass
+their headers on the production stack. Honest deltas: G1 gap bias +1.8 → +6.5 m and G2 TTC
+margin 2.45 → 2.2 s (gate 2.0), both traced by harness bisect to the dropped
+`accel_tracking_enabled: false` — i.e. the ACC↔longitudinal routing seam (T-ACC-EQ-BIAS), a base
+design item, not re-added as an overlay key. All three archived stacks live in `config/legacy/`;
+every ACC scenario now measures the production controller.
 Next: autobahn/hill minimal overlays; speed-planner launch ramp; lateral re-base on the at-car
 error (s_loop 0.34 / hairpin 0.58 m RMS remain the structural item).
 
