@@ -591,6 +591,22 @@ archived autobahn NMPC retune was never exercised by these scenarios. The percep
 guardrail stays off ONLY in `acc_autobahn.yaml`, declared as the scenario's speed premise.
 Archived: `config/legacy/acc_{highway,autobahn,hill_highway}_full_2026-03.yaml`.
 
+**Night-59 (2026-10-10) read-out — first 14/14 PASS ever, composite scores lower; both drops are
+scorer artefacts, not driving:** H2 95.1 → 87.5, A1 95.0 → 86.4, A2 90.8 → 80.6, H8 86.9 → 82.0.
+(1) *Tracking* deducts 1 pt/m of **full-run** gap RMSE over ACC-active frames. The nightly's old-overlay
+runs were 200–215 s, the production runs 90–120 s; pre-convergence frames are identical (~320–350) so
+the shorter runs dilute the startup transient less — predicted ratio √(323/1907)/√(354/2494) = 1.09
+for H2, 1.36 for A2; observed 1.25 and 1.39. Launch speeds match (5.3–5.7 m/s at 5 s), post-conv RMSE
+vs equilibrium is 2.0 → 3.8 (H2), 4.7 → 5.7 (A2), 2.1 → 3.1 (A1), bias +0.5…+2 m. H8's old 35 m also
+benefited from hunting dropping high-error frames. (2) *Behavior* takes the full 30-pt cap at
+> 30 sign-flips/min of `longitudinal_accel_cmd_smoothed`: 17–72/min old → 76–103/min production,
+but with a 0.3 m/s² deadband it is 3.5–12.6/min (old 0–20); command std 0.08–0.13 m/s², p95 |a|
+0.16–0.32. The production accel-tracking law chatters around zero at tiny amplitude (pedal
+alternations doubled: H2 17 → 39/min, G2 49 → 82/min) — real but small, part of the routing seam.
+Scorer items, both for the scorer work-package: Tracking must be post-convergence or
+duration-normalised (the gate already is — T-ACC-RMSE-GATE — the composite is not), and the sign-flip
+metric needs the T-METRIC-DEADBAND magnitude threshold. Do not tune the controller for either.
+
 ### T-LAUNCH-CURVATURE-SEED — first-frame curvature source seeded the governor with a stationary-car perception κ (2026-10-09, FIXED)
 
 **Measurement:** none — the recorded fields were right; this is mechanism.

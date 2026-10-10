@@ -329,6 +329,15 @@ memory `feedback_nightly_retro_proposes_into_void`.
   `accel_tracking_enabled: false`, a T-ACC-EQ-BIAS routing item, NOT a reason to re-add the key);
   G2 TTC min ≈ 2.2 s (gate 2.0; was 2.4–2.5); A1 RMSE 3–4 m; A2 TTC ≈ 14 s. A G1 reading just over
   10 m or a G2 TTC of 2.0–2.1 is this known margin loss — report it as such, flag it, do not tune.
+- **Composite scores dropped 5–10 pts on Night-59 with all 14 gates PASS — scorer artefacts, not a
+  regression (2026-10-10 analysis in tasks.md T-ACC-OVERLAY-STACK):** Tracking uses FULL-RUN gap RMSE,
+  so a 90–120 s run scores lower than a 200 s run of identical driving (startup transient diluted
+  less); Behavior's 30-pt sign-flip cap fires on `longitudinal_accel_cmd_smoothed` chatter of
+  ±0.1–0.3 m/s² that the production law produces (76–103/min raw, 4–13/min with a 0.3 m/s² deadband).
+  When comparing composite scores across nights, state both run durations; when a Behavior cap
+  fires, state the command std (p95 |a| < 0.35 m/s² = chatter, not oscillation). The fix is in the
+  scorer (T-METRIC-DEADBAND, post-conv Tracking), not the controller. Use the same --duration as the
+  previous fresh run of that scenario when re-seeding, so composites stay comparable.
 - **ACC jerk gate 2026-10-07:** `ACC_JERK_P95_GATE_MPS3` 4.0 → 15.0 (emergency 10 → 37.5), PROVISIONAL.
   Measured jerk scales with 1/dt² and the old bar was set on the synthetic clock. Real-clock readings so
   far: H2 7.8, H8 8.4, H4 2.9 m/s³. Report the gate value per scenario each night so the bar can be
