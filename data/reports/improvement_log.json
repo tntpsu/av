@@ -345,5 +345,22 @@
     "prevention": "Rule: a hysteresis/debounce gate must bypass on first selection (no prior state); stateful consumers of curvature_primary_abs must ignore hysteresis_hold frames (architecture.md). Rule already in CLAUDE.md but violated in March: never fix a base behaviour in a scenario overlay; tests/test_config_overlays_respect_base_safety.py now exists and the highway overlay is minimal, so an overlay-vs-base divergence shows up as a config diff. Diagnostic that found it in minutes: print the first 12 frames of curvature_primary_source / curvature_selection_reason / speed_governor_comfort_speed / active_limiter at launch.",
     "detection_method": "Launch-profile dump of the H2 minimal-overlay A/B recordings (comfort speed decaying as a distance-EMA of a frame-0 spike), then reading _select_primary_curvature; decay physics confirmed by replaying the recorded speed trace through trajectory.utils.smooth_curvature_distance (tests/test_curvature_source_seed.py)",
     "detection_delay_iterations": 2
+  },
+  {
+    "date": "2026-10-10",
+    "commit_summary": "df79a6d feat(scoring): post-convergence ACC tracking, sign-flip deadbands, soft-knee caps, engage-edge term, continuous overall cap",
+    "issue": "Three scorer validity defects, all visible the morning after the first 14/14 ACC PASS: (1) ACC composite Tracking used full-run gap RMSE, so a 90 s run of identical driving scored 5-15 pts below a 200 s run (startup transient diluted less); (2) sign-flip metrics had no magnitude threshold, so +/-0.1-0.3 m/s^2 accel-command chatter took the full 30-pt Behavior cap on every production scenario; (3) the composite never scored ACC engage/disengage toggling (dropouts leave the active mask), so the Night-58 hunting H8 out-scored the clean H8. Plus the overall critical-layer step cap made s_loop flip 79 <-> 94 on a 0.8-pt Trajectory move, and the IDM equilibrium diverging near free-flow let a 145 m catch-up read 'converged at 0.5 s'.",
+    "deduction_eliminated": "Night-59 pool: A1 86.4->100, A2 80.6->97.8, H2 87.5->100, H3 87.3->98.1, H5 94.0->100, H7 89.6->100, H8 82.0->96.1, G2 90.4->100; s_loop golden 79.0->94.0 (cliff removed), hairpin 59.0->50.2 (honest red). Ranking restored: hunting H8 94.6 < clean 96.1; G1 limit cycle 93.4; old A2 94.7 (63 s convergence now visible).",
+    "tracks_affected": [
+      "all ACC scenarios",
+      "s_loop",
+      "hairpin_15"
+    ],
+    "root_cause": "Metrics defined over whichever frames happened to be in a mask (all ACC-active frames, or sign changes of any magnitude) rather than over the physical quantity they claim to score: tracking quality is a post-transient property, oscillation needs an amplitude, and toggling in and out of a mode is invisible to any metric restricted to the mode. Step caps and hard penalty caps destroyed ranking on top.",
+    "process_stage": "design",
+    "process_sub": "design/state-discretization",
+    "prevention": "Metric design rules now in docs/agent/metrics.md: every rate metric states its window and its deadband; nothing over 'all active frames' for a quantity with a transient; no hard caps; a mode-toggle metric must be measured over the whole run. Validation recipe used here and worth repeating: re-score the current pool AND the archived failure runs (hunting H8, limit-cycle G1, slow old A2) and require the known-bad to rank below the known-good before freezing.",
+    "detection_method": "Night-59 report read: all 14 gates PASS with composites 5-10 pts down; matched-pair re-scoring old-overlay vs production recordings with acc_pipeline_analysis Card 5; dilution predicted from sqrt(n_pre/n_total) and matched; deadband sweep 0/0.05/0.1/0.3 m/s^2; sanity re-score of archived failure runs exposed the engage-edge blind spot and the EQ divergence",
+    "detection_delay_iterations": 1
   }
 ]
