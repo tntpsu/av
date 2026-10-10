@@ -53,6 +53,7 @@ from scoring_registry import (
     TIME_BASE_SCORING,
     TIME_BASE_FIELDS,
     STEERING_JERK_PENALTY_CAP,
+    OVERALL_CRITICAL_CAP_MODE,
     HEADING_PENALTY_FLOOR_DEG,
     ACC_COLLISION_GATE,
     ACC_TTC_CRITICAL_S,
@@ -5476,6 +5477,24 @@ def select_lateral_error_frame(f, lookahead, frame: str = LATERAL_ERROR_SCORING_
         return out
     return out
 
+def critical_layer_cap(layer_score: float, mode: str = OVERALL_CRITICAL_CAP_MODE) -> float:
+    """Overall-score ceiling implied by one critical layer (Safety / Trajectory).
+
+    "step" (legacy): 100 if the layer is green (≥ 80), 79 if yellow (60–80), 59 if red (< 60).
+    The step made the overall bistable: s_loop flipped 79.0 ↔ 94.4 on a 0.8-pt Trajectory move
+    with identical driving (2026-10-09). "continuous" (T-METRIC-UNCAP, 2026-10-10): same bands,
+    no cliff — 100 at ≥ 80, linear to 59 at 60, linear to 0 at 0; monotone and continuous.
+    """
+    v = float(layer_score)
+    if mode == "step":
+        return 100.0 if v >= 80.0 else (79.0 if v >= 60.0 else 59.0)
+    if v >= 80.0:
+        return 100.0
+    if v >= 60.0:
+        return 59.0 + (100.0 - 59.0) * (v - 60.0) / 20.0
+    return max(0.0, 59.0 * v / 60.0)
+
+
 def analyze_recording_summary(
     recording_path: Path,
     analyze_to_failure: bool = False,
@@ -10616,12 +10635,11 @@ def analyze_recording_summary(
             critical_layer_colors[layer] = "yellow"
         else:
             critical_layer_colors[layer] = "green"
+        critical_cap = min(critical_cap, critical_layer_cap(score_val, OVERALL_CRITICAL_CAP_MODE))
 
     if any(color == "red" for color in critical_layer_colors.values()):
-        critical_cap = 59.0
         cap_reason = "critical_red_layer"
     elif any(color == "yellow" for color in critical_layer_colors.values()):
-        critical_cap = 79.0
         cap_reason = "critical_yellow_layer"
 
     score = safe_float(min(overall_base, critical_cap))
@@ -11379,6 +11397,7 @@ def analyze_recording_summary(
                 "overall_base_score": overall_base,
                 "overall_cap": critical_cap,
                 "cap_reason": cap_reason,
+                "cap_mode": OVERALL_CRITICAL_CAP_MODE,
                 "critical_layer_status": critical_layer_colors,
             },
         },

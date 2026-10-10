@@ -781,5 +781,31 @@
   ],
   "superseded_by": null,
   "resolved_by": null
+ },
+ {
+  "date": "2026-10-10",
+  "target_metric": "ACC composite + overall critical cap validity (scorer work-package step 1)",
+  "target_track": "all ACC scenarios; s_loop/hairpin_15 goldens",
+  "approach": "Post-conv Tracking vs IDM EQ + convergence time; sign-flip deadbands 0.315 m/s^2 / 2.0 m; soft-knee caps; whole-run engage/disengage edge term; EQ validity guard (EQ <= 3x target); continuous critical-layer cap. All kill-switched in scoring_registry. Validated by re-scoring the 14 Night-59 recordings, 6 goldens and 4 archived failure runs (Night-58 hunting H8, G1 limit cycle, old-overlay A2/H2).",
+  "fix_level": "TOOLING (scorer)",
+  "hypothesis": "Night-59's 5-15 pt composite drop was run-length dilution + deadband-less sign flips, and the composite was blind to the H8 hunting mechanism.",
+  "outcome": "SUCCESS",
+  "outcome_status": "RESOLVED",
+  "metric_before": 82.0,
+  "metric_after": 96.1,
+  "root_cause_of_failure": null,
+  "root_cause_detail": "Production pool: A1 86.4->100, A2 80.6->97.8, H2 87.5->100, H3 87.3->98.1, H4 95.7->100, H5 94.0->100, H6 98.4->100, H7 89.6->100, H8 82.0->96.1, G1 95.8->96.7, G2 90.4->100. Ranking sanity: Night-58 hunting H8 94.6 < clean H8 96.1 (27 edges -16.1); G1 limit-cycle 93.4 (24 edges -23.1); old-overlay A2 94.7 (converged 63.5 s -17.7). Goldens: s_loop 79.0->94.0, hairpin 59.0->50.2 (step cap removed). Open: T-METRIC-ACC-DROPOUT-FRAMES (dropout frames leave the Tracking mask, 0.8-1.9 % on hunting runs).",
+  "iterations_spent": 2,
+  "files_changed": [
+   "tools/scoring_registry.py",
+   "tools/analyze/acc_pipeline_analysis.py",
+   "tools/drive_summary_core.py",
+   "tests/test_acc_score.py",
+   "tests/test_overall_cap.py",
+   "tests/conftest.py",
+   "tests/fixtures/scoring_baselines.json"
+  ],
+  "superseded_by": null,
+  "resolved_by": null
  }
 ]

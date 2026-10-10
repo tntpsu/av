@@ -194,6 +194,15 @@ every pre-10-05 file) is replaced by `unity_time`. Kill-switch:
 `scoring_registry.TIME_BASE_SCORING = "recorded"`. Never derive a rate from a pre-10-05
 `vehicle/timestamps`, and never compare accel/jerk/steering-jerk across the 2026-10-05 boundary.
 
+**Scoring semantics (2026-10-10, T-METRIC-ACC-COMPOSITE-2026-10 / T-METRIC-UNCAP / T-METRIC-DEADBAND):**
+the overall critical-layer cap is continuous (`OVERALL_CRITICAL_CAP_MODE`; goldens s_loop 94.0,
+hairpin_15 50.2 — the old step cap had pinned them at 79.0/59.0), and the ACC composite scores
+post-convergence tracking vs the IDM equilibrium plus convergence time, sign flips beyond a deadband
+(0.315 m/s² accel, 2.0 m gap), engage/disengage edges, with soft-knee caps. Header `Expected:` gates
+are unchanged. **Never compare an overall score or an ACC composite across the 2026-10-10 boundary**;
+the kill-switches are the `ACC_SCORE_*` / `OVERALL_CRITICAL_CAP_MODE` constants in
+`tools/scoring_registry.py`.
+
 | Metric | Target |
 |---|---|
 | Accel P95 | ≤ 3.0 m/s² |

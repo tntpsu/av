@@ -197,6 +197,44 @@ ACC_SCORE_OSC_PENALTY_CAP: float       = 30.0   # pts max from Behavior
 ACC_SCORE_BANGBANG_PENALTY: float      = 5.0    # pts per bang-bang event (brake+throttle within 1s)
 ACC_SCORE_BANGBANG_PENALTY_CAP: float  = 20.0   # pts max from Behavior
 
+# ── ACC composite: scorer work-package 2026-10-10 (T-METRIC-DEADBAND, T-METRIC-UNCAP, post-conv Tracking) ──
+# Sign-flip metrics ignore excursions inside a magnitude deadband. 0.315 m/s² is the ISO 2631-1
+# a_w boundary below which weighted acceleration is "not uncomfortable": a command that crosses zero
+# without leaving that band is chatter, not oscillation. Night-59 production runs: 76–103 flips/min
+# raw, 4–13/min at this deadband (command std 0.08–0.13 m/s²); a ±0.5 m/s² hunt still counts.
+ACC_SCORE_OSC_DEADBAND_MPS2: float     = 0.315
+# Gap-error flips: measured post-convergence vs the IDM equilibrium the error hovers near zero, so
+# radar quantisation and EQ drift with speed produce 25–130 crossings/min on runs with 0–1 engage edges.
+# 2.0 m = IDM s0 = the convergence-tolerance floor: steady following (H2/H4/H5/H6/A1/G2) reads 1–17/min,
+# post-manoeuvre gap swings (A2/H3/H8/G1) and the Night-58 hunting H8 read 27–52/min.
+ACC_SCORE_HUNTING_DEADBAND_M: float    = 2.0
+# Soft-knee caps: pen = cap·(1 − exp(−raw/cap)). Same cap asymptotically, but severity keeps ranking
+# instead of pegging (A2 gap RMSE 55.9 m and 49.6 m were both exactly −50.0).
+ACC_SCORE_SOFT_CAPS: bool              = True
+# Tracking window: "post_conv" scores gap RMSE vs the IDM equilibrium from convergence onward (same
+# definition as the ACC_GAP_RMSE_POST_CONV_GATE_M gate) plus a convergence-time term; "full_run" is the
+# legacy startup-inclusive RMSE vs target, which scaled with run length (a 90 s run of identical driving
+# scored 5–15 pts below a 200 s run on Night-59).
+ACC_SCORE_TRACKING_WINDOW: str         = "post_conv"
+ACC_SCORE_CONV_TIME_FREE_S: float      = 20.0    # s from first ACC-active frame to convergence — free band
+ACC_SCORE_CONV_TIME_PENALTY_PER_S: float = 1.0   # pts per s beyond the free band (soft-capped)
+ACC_SCORE_CONV_TIME_PENALTY_CAP: float = 20.0    # pts max; also the deduction when ACC never converges
+# Overall score critical-layer cap (Safety/Trajectory): "step" = legacy hard cap 79 (yellow) / 59 (red),
+# which made s_loop flip 79 ↔ 94 on a 0.8-pt Trajectory move; "continuous" = 100 at layer ≥ 80, linear to
+# 59 at 60, linear to 0 at 0 — same bands, no cliff.
+OVERALL_CRITICAL_CAP_MODE: str         = "continuous"
+# ACC engage/disengage toggling (the H8 Night-58 mechanism: 27 edges in 120 s via out_of_cone
+# dropouts). Measured over the whole run, not ACC-active frames — a dropout removes itself from the
+# active mask, which is exactly why no other term saw it. Healthy pool 0–1 edges/min; hunting runs
+# 13.5–24/min. Free band = one engage + one disengage per minute.
+ACC_SCORE_ENGAGE_EDGES_FREE_PER_MIN: float = 2.0
+ACC_SCORE_ENGAGE_EDGE_PENALTY_PER_UNIT: float = 2.0   # pts per excess edge/min (soft-capped)
+ACC_SCORE_ENGAGE_EDGE_PENALTY_CAP: float = 30.0
+# IDM equilibrium gap s* / sqrt(1 − (v/v0)^4) diverges as the ego nears its free-flow speed, so a
+# 145 m catch-up gap can read "converged" (H8: converged_at 0.5 s). Frames whose EQ exceeds this
+# multiple of the target gap carry no usable equilibrium and are excluded from the convergence mask.
+ACC_POST_CONV_EQ_MAX_OVER_TARGET: float = 3.0
+
 # Activity floor — below this the run has too few ACC frames to score meaningfully.
 ACC_SCORE_MIN_ACTIVE_FRAMES: int       = 30     # frames; if fewer ACC-active, score is None
 

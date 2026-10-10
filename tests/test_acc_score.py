@@ -206,13 +206,16 @@ def test_oscillating_accel_deducts_behavior():
 
 
 def test_high_jerk_deducts_behavior():
-    """Jerk P95 above 4 m/s³ should deduct Behavior."""
-    jerk = np.full(600, 9.0)  # 9 m/s³ → 5 above free → 50 deduction (cap)
-    score = _compute_acc_score(_make_input(jerk=jerk))
-    assert score is not None
-    assert score["safety"] == 100.0
-    assert score["behavior"] == 50.0
-
+    """Jerk P95 above 4 m/s³ deducts Behavior; the cap is a soft knee (T-METRIC-UNCAP):
+    9 m/s³ → raw 50 → 50·(1−e⁻¹) = 31.6, and 14 m/s³ (raw 100) still ranks below it."""
+    from acc_pipeline_analysis import _soft_cap
+    score = _compute_acc_score(_make_input(jerk=np.full(600, 9.0)))
+    assert score is not None and score["safety"] == 100.0
+    assert score["behavior"] == pytest.approx(100.0 - _soft_cap(50.0, 50.0), abs=0.05)
+    assert 60.0 < score["behavior"] < 70.0
+    worse = _compute_acc_score(_make_input(jerk=np.full(600, 14.0)))
+    assert worse["behavior"] < score["behavior"]          # severity keeps ranking past the old cap
+    assert worse["behavior"] > 50.0                        # but never exceeds the cap asymptote
 
 def test_estop_event_count_uses_rising_edges():
     """Two e-stop bursts (rising edges), not the total high-frame count."""
@@ -292,3 +295,145 @@ class TestSignFlipsPerMin:
     def test_none_fps_falls_back_without_crashing(self):
         v = np.array([1.0, -1.0, 1.0])
         assert _sign_flips_per_min(v, 100, None) > 0.0
+
+
+# ── Scorer work-package 2026-10-10: deadband, soft caps, post-convergence Tracking ──────────
+
+from acc_pipeline_analysis import _soft_cap  # noqa: E402
+import scoring_registry as _reg  # noqa: E402
+
+
+class TestSoftCap:
+    def test_legacy_hard_cap_when_disabled(self, monkeypatch):
+        import acc_pipeline_analysis as apa
+        monkeypatch.setattr(apa, "ACC_SCORE_SOFT_CAPS", False)
+        assert _soft_cap(10.0, 30.0) == 10.0 and _soft_cap(80.0, 30.0) == 30.0
+
+    def test_soft_knee_is_monotone_and_bounded(self):
+        vals = [_soft_cap(x, 30.0) for x in (0, 5, 30, 60, 300)]
+        assert vals == sorted(vals) and vals[0] == 0.0 and vals[-1] < 30.0
+        assert _soft_cap(30.0, 30.0) == pytest.approx(30.0 * (1 - np.exp(-1)))
+        assert _soft_cap(3.0, 30.0) == pytest.approx(3.0, rel=0.06)   # near-linear in the small-penalty regime
+
+
+class TestSignFlipDeadband:
+    def test_chatter_inside_deadband_does_not_count(self):
+        """Night-59 shape: accel command flipping sign at ±0.1 m/s² (std 0.08–0.13) — chatter."""
+        n = 1300  # 100 s at 13 fps
+        chatter = 0.1 * np.sign(np.sin(np.arange(n) * 2 * np.pi / 13))   # one flip pair per second
+        score = _compute_acc_score(_make_input(n=n, accel_cmd=chatter))
+        assert score["behavior"] == 100.0
+        assert _sign_flips_per_min(chatter, n, 13.0) > 60.0                       # legacy count
+        assert _sign_flips_per_min(chatter, n, 13.0, deadband=_reg.ACC_SCORE_OSC_DEADBAND_MPS2) == 0.0
+
+    def test_real_oscillation_beyond_deadband_still_counts(self):
+        n = 1300
+        hunt = 0.6 * np.sign(np.sin(np.arange(n) * 2 * np.pi / 13))
+        score = _compute_acc_score(_make_input(n=n, accel_cmd=hunt))
+        assert score["behavior"] < 100.0
+        assert any("sign-flips" in label for label, _ in score["deductions"]["behavior"])
+
+    def test_zero_deadband_reproduces_legacy(self):
+        v = np.array([0.01, -0.01, 0.02, -0.02, 0.5, -0.5])
+        assert _sign_flips_per_min(v, 100, 13.0, deadband=0.0) == _sign_flips_per_min(v, 100, 13.0)
+
+
+def _following_input(n=2600, startup=200, eq=27.0, tg=15.0, noise=0.0, swing=0.0, fps=13.0):
+    """Ego from rest: 60 m gap for `startup` frames, then parked at the IDM equilibrium
+    (plus optional sub-metre noise or a ±swing oscillation)."""
+    rng = np.random.default_rng(0)
+    gap = np.full(n, 60.0)
+    k = np.arange(n - startup)
+    gap[startup:] = eq + noise * rng.standard_normal(n - startup) + swing * np.sign(np.sin(k * 2 * np.pi / 26))
+    inp = _make_input(n=n, gap_error=gap - tg)
+    inp["acc_target_gap"] = np.full(n, tg)
+    inp["acc_equilibrium_gap"] = np.full(n, eq)
+    inp["fps"] = fps
+    return inp
+
+
+class TestPostConvergenceTracking:
+    def test_startup_transient_is_not_scored(self):
+        """200 s run vs 90 s run of identical driving must score the same (Night-59 dilution bug)."""
+        long = _compute_acc_score(_following_input(n=2600))
+        short = _compute_acc_score(_following_input(n=1170))
+        assert long["tracking_window"] == "post_conv" == short["tracking_window"]
+        assert long["tracking"] == pytest.approx(short["tracking"], abs=0.1)
+        assert long["tracking"] == 100.0                        # parked at EQ: nothing to deduct
+        assert long["conv_time_s"] == pytest.approx(200 / 13.0, abs=0.2)
+
+    def test_legacy_full_run_window_scales_with_duration(self, monkeypatch):
+        import acc_pipeline_analysis as apa
+        monkeypatch.setattr(apa, "ACC_SCORE_TRACKING_WINDOW", "full_run")
+        long = _compute_acc_score(_following_input(n=2600))
+        short = _compute_acc_score(_following_input(n=780))
+        assert long["tracking_window"] == "full_run"
+        assert short["tracking"] < long["tracking"] - 5.0        # the artefact this change removes
+
+    def test_sub_metre_noise_around_equilibrium_is_not_hunting(self):
+        score = _compute_acc_score(_following_input(noise=0.4))
+        assert not any("hunting" in label for label, _ in score["deductions"]["tracking"])
+
+    def test_gap_swing_beyond_s0_is_hunting(self):
+        score = _compute_acc_score(_following_input(swing=3.0))
+        assert any("hunting" in label for label, _ in score["deductions"]["tracking"])
+
+    def test_slow_convergence_is_deducted(self):
+        slow = _compute_acc_score(_following_input(n=2600, startup=13 * 40))   # 40 s to converge
+        fast = _compute_acc_score(_following_input(n=2600, startup=13 * 10))
+        assert fast["tracking"] == 100.0
+        assert slow["tracking"] < fast["tracking"]
+        assert any("converged" in label for label, _ in slow["deductions"]["tracking"])
+
+    def test_never_converged_takes_the_cap_and_falls_back(self):
+        inp = _following_input(n=1300, startup=1300)              # never reaches EQ
+        score = _compute_acc_score(inp)
+        assert score["tracking_window"].startswith("full_run")
+        assert any("never converged" in label for label, _ in score["deductions"]["tracking"])
+        assert score["conv_time_s"] is None
+
+    def test_no_equilibrium_field_falls_back_to_full_run(self):
+        score = _compute_acc_score(_make_input(gap_error=np.zeros(600)))
+        assert score["tracking_window"] == "full_run" and score["tracking"] == 100.0
+
+
+class TestEngageEdges:
+    def test_steady_following_has_no_edge_penalty(self):
+        score = _compute_acc_score(_following_input())
+        assert not any("engage/disengage" in label for label, _ in score["deductions"]["behavior"])
+
+    def test_hunting_toggle_is_penalised_even_though_dropouts_leave_the_mask(self):
+        """Night-58 H8 shape: 27 edges in 120 s. Each dropout removes its own frames from the
+        ACC-active mask, so Tracking never saw it; the whole-run edge rate does."""
+        inp = _following_input(n=1560)                               # 120 s
+        flag = inp["acc_active"].copy()
+        for k in range(13):                                          # 13 dropouts of 10 frames → 26 edges
+            flag[400 + 60 * k: 400 + 60 * k + 10] = 0.0
+        inp["acc_active"] = flag; inp["acc_active_flag"] = flag
+        score = _compute_acc_score(inp)
+        labels = [label for label, _ in score["deductions"]["behavior"]]
+        assert any("engage/disengage 26 edges" in l for l in labels), labels
+        assert score["behavior"] < 90.0
+
+    def test_single_legitimate_disengage_is_free(self):
+        """H4 accel-away: one engage + one disengage over the run must not cost anything."""
+        inp = _following_input(n=1560)
+        inp["acc_active"][1300:] = 0.0; inp["acc_active_flag"] = inp["acc_active"]
+        score = _compute_acc_score(inp)
+        assert not any("engage/disengage" in label for label, _ in score["deductions"]["behavior"])
+
+
+class TestEquilibriumValidityGuard:
+    def test_diverging_equilibrium_does_not_count_as_convergence(self):
+        """IDM EQ → ∞ as v → v0: a 145 m catch-up gap must not read 'converged at 0.5 s'."""
+        from acc_pipeline_analysis import _post_convergence_mask
+        n = 600
+        acc = np.ones(n, dtype=bool)
+        gap = np.full(n, 145.0); gap[300:] = 30.0
+        eq = np.full(n, 145.0); eq[300:] = 30.0                       # EQ tracks the gap while diverged
+        tg = np.full(n, 32.0)
+        legacy = _post_convergence_mask(acc, gap, eq)                 # no target → no guard
+        guarded = _post_convergence_mask(acc, gap, eq, tg)
+        assert int(np.flatnonzero(legacy)[0]) == 0
+        assert int(np.flatnonzero(guarded)[0]) == 300
+        assert guarded[:300].sum() == 0

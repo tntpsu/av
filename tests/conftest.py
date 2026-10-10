@@ -50,9 +50,9 @@ BASELINE_SCORES: dict[str, float] = {
     # 2026-10-05 FINAL: goldens = first sweep on the real-time Unity player (clock ratio 1.00), scored
     # at the car; comfort metrics in real seconds. s_loop / hairpin_15 are truthful tight-curve values
     # (GOLDEN_BELOW_FLOOR). Pre-10-05 numbers are not comparable (synthetic 1/13 s clock).
-    "s_loop":           79.0,
+    "s_loop":           94.0,   # 2026-10-10: continuous critical cap (was 79.0 = step cap at Traj 79.6)
     "highway_65":       99.6,
-    "hairpin_15":       59.0,
+    "hairpin_15":       50.2,   # 2026-10-10: continuous critical cap (was 59.0 = step cap at Traj 50.2)
     "sweeping_highway": 98.3,
     "mixed_radius":     99.2,
     "hill_highway":     99.5,

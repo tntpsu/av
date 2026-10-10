@@ -1,6 +1,6 @@
 # AV Stack — Agent Memory: Tasks
 
-**Last updated:** 2026-10-09
+**Last updated:** 2026-10-10
 
 ---
 
@@ -19,7 +19,9 @@ Measured baseline to gate against (5 A/B pairs, highway_h3): lateral MSDV median
 Blocked on baseline re-freezing (Testing Protocol). Use `/revalidate` for
 pre/post on fixed recordings, not fresh Unity runs.
 
-### T-METRIC-UNCAP — saturating penalty caps destroy ranking (2026-08-15)
+### T-METRIC-UNCAP — saturating penalty caps destroy ranking (2026-08-15) — **DONE 2026-10-10**
+
+**Landed:** every `ACC_SCORE_*_PENALTY_CAP` is a soft knee `cap·(1−e^(−raw/cap))` (`ACC_SCORE_SOFT_CAPS`), and the overall critical-layer step cap (79 yellow / 59 red) is continuous (`OVERALL_CRITICAL_CAP_MODE`, `drive_summary_core.critical_layer_cap`): 100 at ≥ 80, linear to 59 at 60, linear to 0. Goldens re-based: s_loop 79.0 → 94.0, hairpin_15 59.0 → 50.2 (the step had pinned both). `STEERING_JERK_PENALTY_CAP` is a threshold, not a cap — unchanged. See T-METRIC-ACC-COMPOSITE-2026-10.
 
 Six caps in `scoring_registry.py`. A cap means the worst performers are
 indistinguishable and improvement is invisible until you drop below it —
@@ -30,7 +32,9 @@ scenarios still pegged at a cap even after the fps fix (A2 gap RMSE 55.86 m →
 Replace hard caps with soft-knee (log or asymptotic) scaling so severity keeps
 ranking. Affects `ACC_SCORE_*_PENALTY_CAP` and `STEERING_JERK_PENALTY_CAP`.
 
-### T-METRIC-DEADBAND — sign-flip metrics need a magnitude threshold (2026-08-15)
+### T-METRIC-DEADBAND — sign-flip metrics need a magnitude threshold (2026-08-15) — **DONE 2026-10-10**
+
+**Landed:** `_sign_flips_per_min(..., deadband=)`; accel command `ACC_SCORE_OSC_DEADBAND_MPS2 = 0.315` (ISO 2631-1 "not uncomfortable" a_w boundary — a stronger anchor than the 0.10 proposed below, and the production law's ±0.1–0.3 m/s² chatter sits inside it: Night-59 76–103 flips/min → 4–13), gap error `ACC_SCORE_HUNTING_DEADBAND_M = 2.0` (IDM s0 = convergence floor). See T-METRIC-ACC-COMPOSITE-2026-10.
 
 `_sign_flips_per_min` counts sign changes with no magnitude floor, so it counts
 zero-crossings of a command that idles at −0.01 m/s² (40% of ACC frames are
@@ -42,6 +46,35 @@ regression" that vanished entirely at a 0.05 m/s² dead-band:
     db=0.10  at_car 16.3 / 12.9   lookahead 15.8 /  15.1   <- both under the 30 gate
 
 Proposed `db = 0.10 m/s²`. Scoring change — needs baseline re-freeze.
+
+### T-METRIC-ACC-COMPOSITE-2026-10 — scorer work-package step 1 (2026-10-10, DONE; one item open)
+
+Motivation: Night-59 scored the first 14/14 ACC PASS 5–15 pts *lower* than the overlay stack it
+replaced, for two scorer reasons (run-length dilution, deadband-less sign flips), and the composite
+had never seen the H8 hunting the nightly's prose rule caught. Changes, all in
+`tools/analyze/acc_pipeline_analysis.py` + `tools/scoring_registry.py`, each with a kill-switch:
+
+| change | switch | effect |
+|---|---|---|
+| Tracking scores **post-convergence gap RMSE vs the IDM equilibrium** (the gate's definition) + a convergence-time term (free ≤ 20 s from first engagement, 1 pt/s, soft cap 20; never-converged = the cap) | `ACC_SCORE_TRACKING_WINDOW` (`full_run` legacy) | identical driving scores the same at 90 s and 200 s |
+| Sign-flip deadbands (accel 0.315 m/s², gap 2.0 m) | `ACC_SCORE_*_DEADBAND_*` = 0 | chatter no longer costs the 30-pt cap; ±0.5 m/s² hunts and ±3 m gap swings still do |
+| Soft-knee caps | `ACC_SCORE_SOFT_CAPS` | severity ranks past the old cap |
+| **ACC engage/disengage edges** (whole run; free ≤ 2/min, 2 pts per edge/min, soft cap 30) | — (free band) | the H8 Night-58 mechanism finally scores: 27 edges → −16 |
+| EQ validity guard in `_post_convergence_mask`: frames with EQ > 3× target gap carry no equilibrium (IDM s*/√(1−(v/v0)⁴) diverges near free-flow) | `ACC_POST_CONV_EQ_MAX_OVER_TARGET` | H8 no longer "converges at 0.5 s" at a 145 m gap; also fixes the gate's post-conv window |
+| Overall critical-layer cap continuous | `OVERALL_CRITICAL_CAP_MODE` | s_loop 79 ↔ 94 cliff gone |
+
+**Before → after on the Night-59 pool (production stack):** A1 86.4 → 100, A2 80.6 → 97.8 (conv 29 s),
+H2 87.5 → 100, H3 87.3 → 98.1, H4 95.7 → 100, H5 94.0 → 100, H6 98.4 → 100, H7 89.6 → 100,
+H8 82.0 → 96.1 (post-conv RMSE 9.4 m, 30/min gap swing), G1 95.8 → 96.7 (RMSE 8.6 m), G2 90.4 → 100.
+Sanity ranking on archived runs: Night-58 hunting H8 94.6 (< clean 96.1; 27 edges −16),
+G1 limit-cycle 93.4 (24 edges −23), old-overlay A2 94.7 (converged 63 s, −17.7).
+**Composites before and after 2026-10-10 are not comparable.** Header gates are unchanged.
+
+**Open — T-METRIC-ACC-DROPOUT-FRAMES:** frames where a lead is detected in range but ACC is inactive
+(a dropout) leave the Tracking mask, so their gap error is unscored; on the hunting runs this is
+0.8–1.9 % of frames — small, now also caught by the edge term, but a "lead present, not following"
+Tracking term would close it properly.
+**Next in the package:** T-SCORE-SPEED-COMPLIANCE (needs a weighting decision), T-METRIC-MSDV-WIRE.
 
 ### T-SCORE-SPEED-COMPLIANCE — speed/progress is not scored at all (2026-08-14)
 

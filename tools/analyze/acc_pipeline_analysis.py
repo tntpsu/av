@@ -59,6 +59,17 @@ from scoring_registry import (
     ACC_SCORE_BANGBANG_PENALTY,
     ACC_SCORE_BANGBANG_PENALTY_CAP,
     ACC_SCORE_MIN_ACTIVE_FRAMES,
+    ACC_SCORE_OSC_DEADBAND_MPS2,
+    ACC_SCORE_HUNTING_DEADBAND_M,
+    ACC_SCORE_SOFT_CAPS,
+    ACC_SCORE_TRACKING_WINDOW,
+    ACC_SCORE_CONV_TIME_FREE_S,
+    ACC_SCORE_CONV_TIME_PENALTY_PER_S,
+    ACC_SCORE_CONV_TIME_PENALTY_CAP,
+    ACC_SCORE_ENGAGE_EDGES_FREE_PER_MIN,
+    ACC_SCORE_ENGAGE_EDGE_PENALTY_PER_UNIT,
+    ACC_SCORE_ENGAGE_EDGE_PENALTY_CAP,
+    ACC_POST_CONV_EQ_MAX_OVER_TARGET,
 )
 
 
@@ -205,12 +216,23 @@ def _card1_radar_health(d: dict) -> None:
                   f"max={float(np.max(dist_valid)):.1f}m")
 
 
-def _post_convergence_mask(acc_mask: np.ndarray, gap: np.ndarray, eq: np.ndarray) -> np.ndarray:
+def _post_convergence_mask(acc_mask: np.ndarray, gap: np.ndarray, eq: np.ndarray,
+                           target_gap: np.ndarray | None = None) -> np.ndarray:
     """ACC-active frames from the first one where the gap is within
     max(2 m, ACC_POST_CONV_TOL_FRAC × EQ) of the IDM equilibrium gap, onward.
     Startup catch-up (H7: ego from rest, lead 10 m/s, gap > 40 m for ~60 s) is
-    excluded by construction; a run that never converges yields an empty mask."""
-    idx = np.flatnonzero(acc_mask & np.isfinite(gap) & np.isfinite(eq) & (eq > 0.0))
+    excluded by construction; a run that never converges yields an empty mask.
+
+    EQ validity (2026-10-10): IDM's equilibrium s*/sqrt(1 − (v/v0)^4) diverges as the ego
+    approaches its free-flow speed, so during a catch-up at near-free-flow speed EQ can
+    equal the 145 m gap and the run "converges" at once (H8). Frames with
+    EQ > ACC_POST_CONV_EQ_MAX_OVER_TARGET × target gap carry no usable equilibrium and
+    are excluded, both for the convergence instant and from the post-conv window."""
+    valid = acc_mask & np.isfinite(gap) & np.isfinite(eq) & (eq > 0.0)
+    if target_gap is not None:
+        tg = np.asarray(target_gap, dtype=float)
+        valid &= np.isfinite(tg) & (eq <= ACC_POST_CONV_EQ_MAX_OVER_TARGET * np.maximum(tg, 0.1))
+    idx = np.flatnonzero(valid)
     if idx.size == 0:
         return np.zeros_like(acc_mask, dtype=bool)
     close = np.abs(gap[idx] - eq[idx]) < np.maximum(2.0, ACC_POST_CONV_TOL_FRAC * eq[idx])
@@ -218,7 +240,7 @@ def _post_convergence_mask(acc_mask: np.ndarray, gap: np.ndarray, eq: np.ndarray
         return np.zeros_like(acc_mask, dtype=bool)
     out = np.zeros_like(acc_mask, dtype=bool)
     out[idx[int(np.argmax(close))]:] = True
-    return out & acc_mask & np.isfinite(gap) & np.isfinite(eq)
+    return out & valid
 
 
 def compute_post_convergence_gap(d: dict) -> dict | None:
@@ -234,7 +256,7 @@ def compute_post_convergence_gap(d: dict) -> dict | None:
         return None
     acc_mask = d["acc_active"] > 0.5
     gap = ge + tg
-    post = _post_convergence_mask(acc_mask, gap, eq)
+    post = _post_convergence_mask(acc_mask, gap, eq, tg)
     if post.sum() < 30:
         return {"converged": False, "n_post": int(post.sum())}
     e = gap[post] - eq[post]
@@ -414,10 +436,26 @@ def _count_sustained_events(mask: np.ndarray, min_run: int = 3) -> int:
     return count
 
 
-def _sign_flips_per_min(values: np.ndarray, n_frames: int, fps: float | None = None) -> float:
+def _soft_cap(raw_penalty: float, cap: float) -> float:
+    """Cap a penalty. Soft-knee (T-METRIC-UNCAP): cap·(1 − e^(−raw/cap)) — monotone in `raw`,
+    asymptotic to `cap`, so two runs beyond the old hard cap still rank. Legacy hard min()
+    when ACC_SCORE_SOFT_CAPS is False."""
+    raw_penalty = max(0.0, float(raw_penalty))
+    if cap <= 0.0:
+        return 0.0
+    if not ACC_SCORE_SOFT_CAPS:
+        return min(cap, raw_penalty)
+    return float(cap * (1.0 - np.exp(-raw_penalty / cap)))
+
+
+def _sign_flips_per_min(values: np.ndarray, n_frames: int, fps: float | None = None,
+                        deadband: float = 0.0) -> float:
     """Sign-flip rate of `values`. Used for hunting (gap_error) and oscillation (accel_cmd).
 
     Treats zeros as "same sign as previous" so a steady-zero region doesn't fake flips.
+    `deadband` (T-METRIC-DEADBAND, 2026-10-10): samples with |value| < deadband are treated
+    as zero, i.e. they inherit the previous sign — a flip counts only when the signal
+    leaves the band on the other side. 0.0 reproduces the legacy count exactly.
 
     2026-08-14 — two bugs fixed here; together they inflated every reported rate
     by ~2.5x and pegged the oscillation penalty at its cap on every scenario, so
@@ -440,6 +478,9 @@ def _sign_flips_per_min(values: np.ndarray, n_frames: int, fps: float | None = N
         return 0.0
     if fps is None or not np.isfinite(fps) or fps <= 0:
         fps = 30.0
+    values = np.asarray(values, dtype=float)
+    if deadband > 0.0:
+        values = np.where(np.abs(values) < deadband, 0.0, values)
     s = np.sign(values)
     # Carry the previous non-zero sign across zeros, so flat-zero regions and
     # zero crossings are not counted as sign changes.
@@ -550,26 +591,67 @@ def _compute_acc_score(d: dict) -> dict | None:
     # ── Tracking sub-layer ─────────────────────────────────────────────────────
     tracking = 100.0
     tracking_deductions: list[tuple[str, float]] = []
+    tracking_window = "none"
+    conv_time_s = None
 
     gap_error = d["acc_gap_error"]
+    eq = d.get("acc_equilibrium_gap")
+    tg = d.get("acc_target_gap")
+    post = None
+    if (ACC_SCORE_TRACKING_WINDOW == "post_conv" and gap_error is not None
+            and eq is not None and tg is not None):
+        gap = gap_error + tg
+        post = _post_convergence_mask(acc_mask, gap, eq, tg)
+        if post.sum() < 30:
+            post = None
+            if acc_mask.any():
+                # Following never settled: full-run RMSE below, plus the convergence-time cap.
+                pen = ACC_SCORE_CONV_TIME_PENALTY_CAP
+                tracking -= pen
+                tracking_deductions.append(("never converged to the IDM equilibrium", pen))
+                tracking_window = "full_run (never converged)"
     if gap_error is not None:
-        ge_acc = gap_error[acc_mask & np.isfinite(gap_error)]
-        if ge_acc.size > 0:
-            rmse = float(np.sqrt(np.mean(ge_acc ** 2)))
+        if post is not None:
+            tracking_window = "post_conv"
+            fps = d.get("fps") or 13.0
+            first_active = int(np.flatnonzero(acc_mask)[0])
+            first_post = int(np.flatnonzero(post)[0])
+            conv_time_s = max(0.0, (first_post - first_active) / float(fps))
+            e_post = (gap - eq)[post]
+            rmse = float(np.sqrt(np.mean(e_post ** 2)))
             if rmse > ACC_SCORE_GAP_RMSE_FREE_M:
-                pen = min(ACC_SCORE_GAP_RMSE_PENALTY_CAP,
-                          (rmse - ACC_SCORE_GAP_RMSE_FREE_M) * ACC_SCORE_GAP_RMSE_PENALTY_PER_M)
+                pen = _soft_cap((rmse - ACC_SCORE_GAP_RMSE_FREE_M) * ACC_SCORE_GAP_RMSE_PENALTY_PER_M,
+                                ACC_SCORE_GAP_RMSE_PENALTY_CAP)
                 tracking -= pen
-                tracking_deductions.append((f"gap RMSE {rmse:.2f}m (free ≤{ACC_SCORE_GAP_RMSE_FREE_M}m)", pen))
-
-            hunting_rate = _sign_flips_per_min(ge_acc, n_active, d.get("fps"))
-            if hunting_rate > ACC_SCORE_HUNTING_FREE_PER_MIN:
-                pen = min(ACC_SCORE_HUNTING_PENALTY_CAP,
-                          (hunting_rate - ACC_SCORE_HUNTING_FREE_PER_MIN) * ACC_SCORE_HUNTING_PENALTY_PER_UNIT)
+                tracking_deductions.append((f"post-conv gap RMSE vs EQ {rmse:.2f}m (free ≤{ACC_SCORE_GAP_RMSE_FREE_M}m)", pen))
+            if conv_time_s > ACC_SCORE_CONV_TIME_FREE_S:
+                pen = _soft_cap((conv_time_s - ACC_SCORE_CONV_TIME_FREE_S) * ACC_SCORE_CONV_TIME_PENALTY_PER_S,
+                                ACC_SCORE_CONV_TIME_PENALTY_CAP)
                 tracking -= pen
-                tracking_deductions.append(
-                    (f"gap-error hunting {hunting_rate:.1f}/min (free ≤{ACC_SCORE_HUNTING_FREE_PER_MIN:.0f})", pen)
-                )
+                tracking_deductions.append((f"converged {conv_time_s:.1f}s after first engagement (free ≤{ACC_SCORE_CONV_TIME_FREE_S:.0f}s)", pen))
+            hunting_rate = _sign_flips_per_min(e_post, int(post.sum()), d.get("fps"),
+                                               deadband=ACC_SCORE_HUNTING_DEADBAND_M)
+        else:
+            if tracking_window == "none":
+                tracking_window = "full_run"
+            ge_acc = gap_error[acc_mask & np.isfinite(gap_error)]
+            hunting_rate = None
+            if ge_acc.size > 0:
+                rmse = float(np.sqrt(np.mean(ge_acc ** 2)))
+                if rmse > ACC_SCORE_GAP_RMSE_FREE_M:
+                    pen = _soft_cap((rmse - ACC_SCORE_GAP_RMSE_FREE_M) * ACC_SCORE_GAP_RMSE_PENALTY_PER_M,
+                                    ACC_SCORE_GAP_RMSE_PENALTY_CAP)
+                    tracking -= pen
+                    tracking_deductions.append((f"gap RMSE {rmse:.2f}m (free ≤{ACC_SCORE_GAP_RMSE_FREE_M}m)", pen))
+                hunting_rate = _sign_flips_per_min(ge_acc, n_active, d.get("fps"),
+                                                   deadband=ACC_SCORE_HUNTING_DEADBAND_M)
+        if hunting_rate is not None and hunting_rate > ACC_SCORE_HUNTING_FREE_PER_MIN:
+            pen = _soft_cap((hunting_rate - ACC_SCORE_HUNTING_FREE_PER_MIN) * ACC_SCORE_HUNTING_PENALTY_PER_UNIT,
+                            ACC_SCORE_HUNTING_PENALTY_CAP)
+            tracking -= pen
+            tracking_deductions.append(
+                (f"gap-error hunting {hunting_rate:.1f}/min (free ≤{ACC_SCORE_HUNTING_FREE_PER_MIN:.0f})", pen)
+            )
 
     tracking = max(0.0, tracking)
 
@@ -591,8 +673,8 @@ def _compute_acc_score(d: dict) -> dict | None:
             if j_acc.size > 0:
                 jerk_p95 = float(np.percentile(j_acc, 95))
                 if jerk_p95 > ACC_SCORE_JERK_FREE_MPS3:
-                    pen = min(ACC_SCORE_JERK_PENALTY_CAP,
-                              (jerk_p95 - ACC_SCORE_JERK_FREE_MPS3) * ACC_SCORE_JERK_PENALTY_PER_MPS3)
+                    pen = _soft_cap((jerk_p95 - ACC_SCORE_JERK_FREE_MPS3) * ACC_SCORE_JERK_PENALTY_PER_MPS3,
+                                    ACC_SCORE_JERK_PENALTY_CAP)
                     behavior -= pen
                     behavior_deductions.append(
                         (f"longitudinal jerk P95 {jerk_p95:.2f} m/s³ (free ≤{ACC_SCORE_JERK_FREE_MPS3:.0f})", pen)
@@ -601,14 +683,28 @@ def _compute_acc_score(d: dict) -> dict | None:
         if accel is not None:
             a_acc = accel[acc_mask & np.isfinite(accel)]
             if a_acc.size > 0:
-                osc_rate = _sign_flips_per_min(a_acc, n_active, d.get("fps"))
+                osc_rate = _sign_flips_per_min(a_acc, n_active, d.get("fps"),
+                                               deadband=ACC_SCORE_OSC_DEADBAND_MPS2)
                 if osc_rate > ACC_SCORE_OSC_FREE_PER_MIN:
-                    pen = min(ACC_SCORE_OSC_PENALTY_CAP,
-                              (osc_rate - ACC_SCORE_OSC_FREE_PER_MIN) * ACC_SCORE_OSC_PENALTY_PER_UNIT)
+                    pen = _soft_cap((osc_rate - ACC_SCORE_OSC_FREE_PER_MIN) * ACC_SCORE_OSC_PENALTY_PER_UNIT,
+                                    ACC_SCORE_OSC_PENALTY_CAP)
                     behavior -= pen
                     behavior_deductions.append(
-                        (f"accel sign-flips {osc_rate:.1f}/min (free ≤{ACC_SCORE_OSC_FREE_PER_MIN:.0f}) — oscillating", pen)
+                        (f"accel sign-flips {osc_rate:.1f}/min beyond ±{ACC_SCORE_OSC_DEADBAND_MPS2:.3g} m/s² (free ≤{ACC_SCORE_OSC_FREE_PER_MIN:.0f}) — oscillating", pen)
                     )
+
+        # ACC engage/disengage toggling — whole-run rate (dropouts leave the active mask).
+        acc_flag = np.asarray(d["acc_active"], dtype=float) > 0.5
+        n_edges = int(np.sum(np.abs(np.diff(acc_flag.astype(int)))))
+        fps_e = d.get("fps") or 13.0
+        edge_rate = n_edges / max(1.0 / 60.0, d["n"] / float(fps_e) / 60.0)
+        if edge_rate > ACC_SCORE_ENGAGE_EDGES_FREE_PER_MIN:
+            pen = _soft_cap((edge_rate - ACC_SCORE_ENGAGE_EDGES_FREE_PER_MIN) * ACC_SCORE_ENGAGE_EDGE_PENALTY_PER_UNIT,
+                            ACC_SCORE_ENGAGE_EDGE_PENALTY_CAP)
+            behavior -= pen
+            behavior_deductions.append(
+                (f"ACC engage/disengage {n_edges} edges = {edge_rate:.1f}/min (free ≤{ACC_SCORE_ENGAGE_EDGES_FREE_PER_MIN:.0f}) — hunting", pen)
+            )
 
         if accel is not None and brake is not None:
             # Bang-bang: brake>0.05 AND accel>0.5 within a 30-frame (~1s) window.
@@ -618,7 +714,7 @@ def _compute_acc_score(d: dict) -> dict | None:
             both_active = (brake > 0.05) & (accel > 0.5) & acc_mask
             n_bb = _count_sustained_events(both_active, min_run=3)
             if n_bb > 0:
-                pen = min(ACC_SCORE_BANGBANG_PENALTY_CAP, n_bb * ACC_SCORE_BANGBANG_PENALTY)
+                pen = _soft_cap(n_bb * ACC_SCORE_BANGBANG_PENALTY, ACC_SCORE_BANGBANG_PENALTY_CAP)
                 behavior -= pen
                 behavior_deductions.append((f"{n_bb} bang-bang event(s) (brake+throttle simultaneous)", pen))
 
@@ -646,6 +742,9 @@ def _compute_acc_score(d: dict) -> dict | None:
         "behavior": (round(behavior, 1) if behavior is not None else None),
         "behavior_skipped_reason": behavior_skipped_reason,
         "n_active_frames": n_active,
+        "tracking_window": tracking_window,
+        "conv_time_s": conv_time_s,
+        "engage_edges": n_edges if "n_edges" in dir() else None,
         "n_collision": n_collision,
         "n_contact_frames": n_contact_frames,
         "post_convergence_gap": compute_post_convergence_gap(d),   # informational; not in the composite yet

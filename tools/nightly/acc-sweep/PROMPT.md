@@ -338,6 +338,14 @@ memory `feedback_nightly_retro_proposes_into_void`.
   fires, state the command std (p95 |a| < 0.35 m/s² = chatter, not oscillation). The fix is in the
   scorer (T-METRIC-DEADBAND, post-conv Tracking), not the controller. Use the same --duration as the
   previous fresh run of that scenario when re-seeding, so composites stay comparable.
+- **Composite semantics changed 2026-10-10 (T-METRIC-ACC-COMPOSITE-2026-10):** Tracking is now
+  post-convergence vs the IDM equilibrium + convergence time, sign flips have deadbands
+  (0.315 m/s² accel, 2.0 m gap), caps are soft knees, and ACC engage/disengage edges are scored
+  (free ≤ 2/min). On the Night-59 pool the production stack now reads: A1/H2/H4/H5/H6/H7/G2 100,
+  A2 ~98, H3 ~98, H8 ~96, G1 ~97. **Do not compare composites with Night-59 or earlier** — report
+  "re-scored under the 10-10 scorer" for any older recording. Expect an "engage/disengage N edges"
+  deduction whenever hunting recurs: that line, not the prose edge count, is now the H8 signal.
+  Header `Expected:` gates are unchanged and remain the verdict.
 - **ACC jerk gate 2026-10-07:** `ACC_JERK_P95_GATE_MPS3` 4.0 → 15.0 (emergency 10 → 37.5), PROVISIONAL.
   Measured jerk scales with 1/dt² and the old bar was set on the synthetic clock. Real-clock readings so
   far: H2 7.8, H8 8.4, H4 2.9 m/s³. Report the gate value per scenario each night so the bar can be

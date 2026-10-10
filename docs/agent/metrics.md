@@ -10,7 +10,7 @@ holds the numbers; this holds *why those numbers*, and where they mislead.
 
 ## 1. The scoring model in one table
 
-Overall score = weighted sum of six layers, then capped if any layer goes yellow.
+Overall score = weighted sum of six layers, then limited by a **continuous** critical-layer cap (Safety/Trajectory: 100 at ≥ 80, linear to 59 at 60, to 0 at 0 — `OVERALL_CRITICAL_CAP_MODE`, 2026-10-10; the legacy step cap 79/59 made s_loop flip 79 ↔ 94 on a 0.8-pt move).
 
 | Layer | Weight | Answers | Main deductions |
 |---|---|---|---|
@@ -81,8 +81,18 @@ invisible until you drop below the cap** — precisely the region where guidance
 matters most. Measured 2026-08-14: 3 of 10 ACC scenarios were still at a cap
 even after the fps fix.
 
-**Proposed:** replace hard caps with soft-knee (log or asymptotic) scaling so
-severity keeps ranking. Filed as T-METRIC-UNCAP.
+**Landed 2026-10-10 (T-METRIC-UNCAP):** every `ACC_SCORE_*_PENALTY_CAP` is a soft knee
+`cap·(1−e^(−raw/cap))` (`ACC_SCORE_SOFT_CAPS`), the overall critical-layer cap is continuous.
+`STEERING_JERK_PENALTY_CAP` is a threshold (penalty starts above 18), not a saturating cap.
+
+### ACC composite semantics since 2026-10-10 (T-METRIC-ACC-COMPOSITE-2026-10)
+
+Tracking = post-convergence gap RMSE vs the IDM equilibrium (free ≤ 5 m) + convergence time from
+first engagement (free ≤ 20 s) + gap-error hunting beyond a 2.0 m deadband (free ≤ 20/min).
+Behavior = jerk P95 + accel-command sign flips beyond ±0.315 m/s² (ISO 2631-1 "not uncomfortable")
++ ACC engage/disengage edges over the whole run (free ≤ 2/min) + bang-bang. The IDM equilibrium is
+treated as undefined where it exceeds 3× the target gap (it diverges near free-flow speed).
+Composites before this date scaled with run length and pinned at caps; do not compare across it.
 
 ---
 

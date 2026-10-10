@@ -1,7 +1,7 @@
 {
   "schema_version": "1",
   "description": "Frozen per-track metric baselines for scoring regression detection. 2026-10-05 FINAL: goldens = first sweep on the real-time Unity player (recording_20261005_0025-0031; CameraCapture sends real timestamps, recorded/unity clock ratio 1.00). Time base rule: a recorded clock that agrees with vehicle/unity_time within 5% is kept (it is the control loop's own cadence); a synthetic one (pre-10-05, ratio ~1.9-2.0) is replaced by unity_time. Comfort metrics are in REAL seconds from here on: accel_p95_filtered ~1.0-1.8 m/s2 (was 0.57-0.90 on the synthetic clock), commanded_jerk_p95 1.4-3.6 m/s3; steering_jerk_max sits exactly at the 18 cap (limiter verified in real time). Pre-10-05 values are NOT comparable. History: 2026-09-28 at-car frame (s_loop 99.1->79.0, hairpin 98.7->59.0); 2026-10-05 interim unity_time pass showed Control 76-80 on the Sep goldens, which was 20 Hz vehicle-state stamp jitter, not the limiter.",
-  "frozen_at": "2026-10-05",
+  "frozen_at": "2026-10-05 | 2026-10-10: s_loop/hairpin_15 overall re-based for OVERALL_CRITICAL_CAP_MODE=continuous (step cap had pinned them at 79.0/59.0)",
   "tolerances": {
     "overall_score": 2.0,
     "lateral_error_adj_rmse": 0.03,
@@ -11,7 +11,7 @@
   },
   "tracks": {
     "s_loop": {
-      "overall_score": 79.0,
+      "overall_score": 94.0,
       "lateral_error_adj_rmse": 0.343,
       "lateral_error_adj_p95": 0.494,
       "accel_p95_filtered": 1.319,
@@ -25,7 +25,7 @@
       "commanded_jerk_p95": 1.415
     },
     "hairpin_15": {
-      "overall_score": 59.0,
+      "overall_score": 50.2,
       "lateral_error_adj_rmse": 0.579,
       "lateral_error_adj_p95": 1.184,
       "accel_p95_filtered": 1.358,
