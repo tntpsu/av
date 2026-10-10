@@ -102,7 +102,8 @@ work on a missing `TESTS.md`.
 5. **Config changes only** — prefer YAML tuning over code changes when possible
 6. **Run comfort gate tests** when touching the analysis pipeline — see Testing Protocol below
 7. **Log fixes after commits** — run `/log-fix` after any commit that fixes an issue (feeds `/process-health` Pareto)
-8. **Physics-first design** — before adding any config parameter, ask: "What physical quantity does this approximate? Can we compute it directly?" Prefer `sqrt(8R×e_target)` over speed lookup tables.
+8. **Scenario overlays are the ACC block plus the scenario's speed keys — nothing else.** A base-behaviour workaround never goes in an overlay: the March-2026 `acc_*.yaml` stacks (149/79/53 non-ACC keys) hid a base launch defect for seven months and made every scenario measure a different controller from the sweep (T-ACC-OVERLAY-STACK; archives in `config/legacy/`). If a scenario needs a base change, change the base behind a kill-switch and A/B it.
+9. **Physics-first design** — before adding any config parameter, ask: "What physical quantity does this approximate? Can we compute it directly?" Prefer `sqrt(8R×e_target)` over speed lookup tables.
 
 ---
 
