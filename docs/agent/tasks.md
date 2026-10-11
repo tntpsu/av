@@ -96,6 +96,36 @@ safety-relevant target: characterise the loop's damping vs speed and curvature o
 telemetry), then fix in the controller (model/plant, speed-scheduled weights) — not by lowering the
 speed budget, which is how the 0.05 g proxy came to exist.
 
+**Characterisation 2026-10-11 (offline, recordings 20261011_0921–0929; coherence ≈ 1.0 at the mode):**
+
+| quantity @ 0.45 Hz on the R200 | 9.8 m/s (stable) | 11.6 m/s (growing) | model |
+|---|---|---|---|
+| controller: MPC e_lat → steering | 0.92 /m, −174° | 0.53 /m, −175° | kinematic model backs off with v — as designed |
+| MPC input | e_lat = d_at_car + 6.3·sin ψ (R² 0.999) | same | lookahead GT, `reference_lookahead_after_slew` ≈ 6 m |
+| plant: steering → d_at_car | 0.42 m/unit, +110° | **1.01 m/unit**, +113° | kinematic+understeer 0.64 → 0.60; dynamic bicycle ×1.23 — **neither predicts the 2.4×** |
+| actuator des → act | τ 0.25–0.27 s, 0.77 @0.45 Hz, −38° | τ 0.22–0.23 s, 0.83, −33° | Unity `steeringTimeConstant` 0.25 ✓ |
+| cmd → desired angle | 15.5°/unit (model 18.6, ratio 0.84) | 14.5°/unit (model 16.4, ratio 0.88) | `steer_gain_ratio` 0.78 memory ✓ |
+| pipeline delay cmd → steering_input | 100 ms (2 frames) | 100 ms | Smith predictor compensates 80 ms (`smith_predictor_max_delay_s`) |
+| yaw gain → L_eff | 3.78–3.90 m | 3.86–3.91 m | understeer model 3.6 / 4.1 ✓ |
+| loop gain estimate | ≈ 0.8 | ≈ 1.0 | crosses unity between the two speeds |
+
+Yaw per steer is as modelled at both speeds, so the unexplained factor (~1.7×) sits between yaw and
+lateral displacement at this frequency — Unity's lateral dynamics (side-slip) or the actuator in a
+regime the first-order fit misses. The MPC's kinematic internal model therefore under-predicts its own
+authority at ≥ 11 m/s on R200-class curves; unmodelled actuator lag (−33°) and the 20 ms of
+uncompensated delay take the remaining margin. Offline oracle `tools/analyze/lmpc_closed_loop_oracle.py`
+is directionally right (ideal plant stable everywhere; measured plant marginal at 11.6) but cannot
+certify a fix until the plant is identified.
+
+**Next (item 3 proper):** (1) plant identification in Unity — open-loop steering chirps/steps at 8, 10,
+12, 14 m/s on highway_65's straight via `replay_control_locked.py` with a synthetic lock series,
+recording yaw rate, lateral velocity, cross-track → steering→lateral frequency response vs speed;
+(2) set the MPC internal model to the identified plant (dynamic model parameters or a speed-scheduled
+steer gain) + actuator lag (τ 0.25, `mpc_actuator_model_enabled`) — the oracle then becomes certifying;
+(3) A/B on the mixed_radius reproducer (`lateral_accel_budget_enabled: true`) with OOL = 0 as the guard;
+(4) resume T-SPEED-OWNER-CONSOLIDATION P1. April's actuator-model and dynamic-model verdicts were made
+on the synthetic clock (dt 1.5× wrong) and at 0.05 g speeds — re-test, do not carry them over.
+
 ### T-METRIC-ACC-COMPOSITE-2026-10 — scorer work-package step 1 (2026-10-10, DONE; one item open)
 
 Motivation: Night-59 scored the first 14/14 ACC PASS 5–15 pts *lower* than the overlay stack it
