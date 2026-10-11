@@ -68,7 +68,11 @@ def compute_speed_utilization(path: str | Path) -> Optional[Dict]:
         n = len(f["vehicle/speed"])
         v = _arr(f, "vehicle/speed", n)
         lim = _arr(f, "vehicle/speed_limit", n)
-        ts = _arr(f, "vehicle/timestamps", n)
+        # Real time when the recording carries it: vehicle/timestamps was the synthetic 1/13 s
+        # capture counter before 2026-10-05 (T-CLOCK-SYNTHETIC-CAPTURE-TIMESTAMP).
+        ts = _arr(f, "vehicle/unity_time", n)
+        if ts is None or not np.all(np.isfinite(ts)) or ts[-1] - ts[0] <= 1.0:
+            ts = _arr(f, "vehicle/timestamps", n)
         prev = _arr(f, "vehicle/speed_limit_preview", n)
         acc = _arr(f, "vehicle/acc_active", n)
         estop = _arr(f, "control/emergency_stop", n)
@@ -147,6 +151,50 @@ def compute_speed_utilization(path: str | Path) -> Optional[Dict]:
         "proposed_gate_pass": bool(np.median(vs_allowed) >= PROPOSED_GATE_MEDIAN and 100.0 * float(under_mask.mean()) <= PROPOSED_GATE_UNDER_PCT),
     })
     return out
+
+
+def score_speed_compliance(s: Optional[Dict]) -> Optional[Dict]:
+    """SpeedCompliance layer (T-SCORE-SPEED-COMPLIANCE, 2026-10-11) from a utilisation summary.
+
+    Two soft-capped deductions: median v/allowed below SPEED_COMPLIANCE_FREE_RATIO (2 pts per
+    1 % shortfall, cap 60) and the share of eligible time under SPEED_COMPLIANCE_UNDER_RATIO
+    beyond a 10 % free band (0.5 pt per %, cap 40). Returns None when the utilisation summary is
+    missing or has too few eligible frames (ACC-following runs) — the layer is then absent.
+    """
+    try:
+        from tools import scoring_registry as reg
+    except ImportError:  # tools/ on sys.path
+        import scoring_registry as reg  # type: ignore
+    if s is None or s.get("status") != "ok":
+        return None
+
+    def soft(raw: float, cap: float) -> float:
+        raw = max(0.0, float(raw))
+        return float(cap * (1.0 - np.exp(-raw / cap))) if cap > 0 else 0.0
+
+    median = float(s["vs_allowed_median"])
+    shortfall_pct = max(0.0, (reg.SPEED_COMPLIANCE_FREE_RATIO - median) * 100.0)
+    pen_median = soft(shortfall_pct * reg.SPEED_COMPLIANCE_PENALTY_PER_PCT, reg.SPEED_COMPLIANCE_PENALTY_CAP)
+    under_pct = float(s["under_utilised_pct"])
+    pen_under = soft(max(0.0, under_pct - reg.SPEED_COMPLIANCE_UNDER_FREE_PCT) * reg.SPEED_COMPLIANCE_UNDER_PENALTY_PER_PCT,
+                     reg.SPEED_COMPLIANCE_UNDER_PENALTY_CAP)
+    attr = s.get("binding_cap_at_under_utilised_pct") or {}
+    binding = ", ".join(f"{k} {v:.0f}%" for k, v in attr.items() if not str(k).startswith("_")) or "—"
+    return {
+        "score": max(0.0, 100.0 - pen_median - pen_under),
+        "deductions": [
+            {"name": "Speed vs allowed (median)", "value": pen_median,
+             "limit": f">={reg.SPEED_COMPLIANCE_FREE_RATIO:.2f} of min(limit, target)",
+             "observed": f"{median:.2f} (speed {s['speed_median_mps']:.1f} / allowed {s['allowed_median_mps']:.1f} m/s)"},
+            {"name": "Time under-utilised", "value": pen_under,
+             "limit": f"<={reg.SPEED_COMPLIANCE_UNDER_FREE_PCT:.0f}% of eligible time below {reg.SPEED_COMPLIANCE_UNDER_RATIO:.2f}",
+             "observed": f"{under_pct:.0f}% (binding cap when slow: {binding})"},
+        ],
+        "vs_allowed_median": median,
+        "under_utilised_pct": under_pct,
+        "eligible_pct": float(s.get("eligible_pct", 0.0)),
+        "binding_cap": binding,
+    }
 
 
 def format_summary(s: Optional[Dict]) -> str:

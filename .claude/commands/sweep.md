@@ -72,10 +72,14 @@ For each track, extract:
 - **Speed Utilisation — vs allowed median and "% under 0.70"** from the
   `SPEED UTILISATION (report-only)` section. Add a `Util` column to the report
   table and one line naming the binding cap when a track is under 0.85. This is
-  REPORT-ONLY (T-METRIC-SPEED-UTILISATION): it is not a gate and must not change
-  the verdict. It exists because nothing else scores whether the car did the job —
-  hill_highway scored 97.6 at 15 mph on a 25 mph road, s_loop runs at half its
-  posted limit, and both were invisible until 2026-09-25.
+  Since 2026-10-11 this IS scored: the `SpeedCompliance` layer (8 %) applies the
+  all-layers-≥ 95 rule like any other layer (T-SCORE-SPEED-COMPLIANCE). Expected on the
+  production stack: highway_65 / sweeping_highway 100, mixed_radius ~88, hairpin_15 ~88,
+  hill_highway ~40, s_loop ~31 — so hill_highway and s_loop FAIL on this layer by design
+  (they drive at ~0.5 of their allowed speed with the curve cap binding). Report it, name
+  the binding cap, do NOT tune; the fix is the speed-owner consolidation (tasks.md).
+  Baselines re-frozen 2026-10-11: s_loop 89.0, hill_highway 94.8, mixed_radius 98.3,
+  sweeping_highway 98.5. Overall scores before 2026-10-11 are not comparable for them.
 
 Compare against baselines from `tests/fixtures/scoring_baselines.json`.
 

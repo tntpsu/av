@@ -78,6 +78,8 @@ def _extract_metrics(summary: dict) -> dict:
         "trajectory_score": float(layers.get("Trajectory", 0)),
         "perception_score": float(layers.get("Perception", 0)),
         "control_score": float(layers.get("Control", 0)),
+        # Absent layer (ACC runs / kill-switch) reads 100 so the floor test does not fire.
+        "speed_compliance_score": float(layers.get("SpeedCompliance", 100.0)),
         "lateral_error_adj_rmse": float(pt.get("lateral_error_adj_rmse", 0)),
         "lateral_error_adj_p95": float(pt.get("lateral_error_adj_p95", 0)),
         "accel_p95_filtered": float(comfort.get("acceleration_p95_filtered", 0)),
@@ -124,14 +126,14 @@ class TestScoringRegression:
         )
 
     def test_layer_scores_not_red(self, track_id: str) -> None:
-        """Every layer (Perception, Trajectory, Control) must score >= 60."""
+        """Every layer (Perception, Trajectory, Control, SpeedCompliance) must score >= 60."""
         path = golden_recording_path(track_id)
         if path is None:
             pytest.skip(f"{track_id} golden recording not on disk")
         summary = analyze_recording_summary(path)
         metrics = _extract_metrics(summary)
-        for layer in ("perception_score", "trajectory_score", "control_score"):
-            label = layer.replace("_score", "").title()
+        for layer in ("perception_score", "trajectory_score", "control_score", "speed_compliance_score"):
+            label = layer.replace("_score", "").replace("_", " ").title()
             val = metrics[layer]
             floor = "traj_red" if layer == "trajectory_score" else f"{layer}_red"
             assert_or_known_floor(

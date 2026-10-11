@@ -807,5 +807,32 @@
   ],
   "superseded_by": null,
   "resolved_by": null
+ },
+ {
+  "date": "2026-10-11",
+  "target_metric": "Score what the car was asked to do: SpeedCompliance layer",
+  "target_track": "all lateral tracks",
+  "approach": "Seventh scoring layer (8 %, others x0.92) from the report-only utilisation metric; two soft-capped deductions (median v/allowed < 0.85; eligible time under 0.70 > 10 %); absent on ACC runs. Kill-switched.",
+  "fix_level": "TOOLING (scorer)",
+  "hypothesis": "The scorer rewarded crawling: a car at half the limit scored 99.",
+  "outcome": "SUCCESS",
+  "outcome_status": "RESOLVED",
+  "metric_before": 99.5,
+  "metric_after": 94.8,
+  "root_cause_of_failure": null,
+  "root_cause_detail": "Goldens: highway_65/sweeping 100 on the layer; mixed_radius 88 (0.78); hairpin 88 (0.84); hill_highway 40.5 (0.56, curve cap binding 74 %) -> overall 99.5->94.8, now FAILS the >=95 layer rule; s_loop 31.2 (0.49, 98 % under 0.70) -> 94.0->89.0. Strict-xfail floors speed_compliance_score_red for both. Weighting 8 % chosen by the agent pending the user's decision (single constant).",
+  "iterations_spent": 1,
+  "files_changed": [
+   "tools/scoring_registry.py",
+   "tools/speed_utilization.py",
+   "tools/drive_summary_core.py",
+   "tools/analyze/analyze_drive_overall.py",
+   "tests/test_speed_compliance_layer.py",
+   "tests/test_scoring_regression.py",
+   "tests/conftest.py",
+   "tests/fixtures/scoring_baselines.json"
+  ],
+  "superseded_by": null,
+  "resolved_by": null
  }
 ]

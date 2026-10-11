@@ -1221,7 +1221,7 @@ def _print_summary_report(recording_path: Path, summary: Dict, analyze_to_failur
     print()
 
     # Score breakdown — why is the overall score what it is?
-    _layer_order = ["Safety", "Trajectory", "Control", "Perception", "LongitudinalComfort", "SignalIntegrity"]
+    _layer_order = ["Safety", "Trajectory", "Control", "Perception", "LongitudinalComfort", "SignalIntegrity", "SpeedCompliance"]
     _layer_scores = summary.get("layer_scores") or {}
     _layer_bd = summary.get("layer_score_breakdown") or {}
     _score_bd = executive.get("score_breakdown") or {}

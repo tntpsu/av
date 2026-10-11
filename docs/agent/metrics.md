@@ -14,12 +14,13 @@ Overall score = weighted sum of six layers, then limited by a **continuous** cri
 
 | Layer | Weight | Answers | Main deductions |
 |---|---|---|---|
-| Safety | 29.4% | Did we avoid harm? | Out-of-lane events, emergency stops, collisions |
-| Trajectory | 27.6% | Did we follow the path? | Lateral Error RMSE (curv-adj), Lateral P95 |
-| Control | 14.7% | Was actuation clean? | Steering jerk, oscillation growth |
-| Perception | 12.9% | Did we see correctly? | Lane detection, stale data, instability, jitter |
-| LongitudinalComfort | 7.4% | Was speed control smooth? | Accel P95, jerk P95 |
-| SignalIntegrity | 8.0% | Were signals trustworthy? | Heading suppression, reference jitter |
+| Safety | 27.1% | Did we avoid harm? | Out-of-lane events, emergency stops, collisions |
+| Trajectory | 25.4% | Did we follow the path? | Lateral Error RMSE (curv-adj), Lateral P95 |
+| Control | 13.5% | Was actuation clean? | Steering jerk, oscillation growth |
+| Perception | 11.9% | Did we see correctly? | Lane detection, stale data, instability, jitter |
+| LongitudinalComfort | 6.8% | Was speed control smooth? | Accel P95, jerk P95 |
+| SignalIntegrity | 7.4% | Were signals trustworthy? | Heading suppression, reference jitter |
+| SpeedCompliance | 8.0% | Did we use the road we were given? | median v/allowed < 0.85, time under 0.70 (2026-10-11; absent on ACC runs → six-layer weights) |
 
 **Pass bar: every layer ≥ 95.** The 60/80 thresholds in
 `test_scoring_regression.py` are drift-detection floors, not the pass bar — see

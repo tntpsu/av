@@ -1,6 +1,6 @@
 # AV Stack — Agent Memory: Tasks
 
-**Last updated:** 2026-10-10
+**Last updated:** 2026-10-11
 
 ---
 
@@ -76,7 +76,30 @@ G1 limit-cycle 93.4 (24 edges −23), old-overlay A2 94.7 (converged 63 s, −17
 Tracking term would close it properly.
 **Next in the package:** T-SCORE-SPEED-COMPLIANCE (needs a weighting decision), T-METRIC-MSDV-WIRE.
 
-### T-SCORE-SPEED-COMPLIANCE — speed/progress is not scored at all (2026-08-14)
+### T-SCORE-SPEED-COMPLIANCE — speed/progress is not scored at all (2026-08-14) — **DONE 2026-10-11**
+
+**Landed:** seventh layer `SpeedCompliance`, weight `SPEED_COMPLIANCE_WEIGHT = 0.08` (the six existing
+layers scale by 0.92, as when SignalIntegrity was added), scored by
+`tools/speed_utilization.score_speed_compliance()` from the report-only utilisation metric: median
+v / min(limit, target) over eligible frames (after 10 s start-up, not following a lead, not e-stopped,
+not braking toward a lower limit) below 0.85 → 2 pts per 1 % (soft cap 60); eligible time under 0.70
+beyond 10 % → 0.5 pt per % (soft cap 40). Absent, with six-layer weights, when < 30 eligible frames
+(ACC following) — ACC scenario scores are unchanged. Kill-switch `SPEED_COMPLIANCE_LAYER_ENABLED`.
+Utilisation now uses `vehicle/unity_time` when present.
+
+| golden | SpeedCompliance | why | overall |
+|---|---|---|---|
+| highway_65 / sweeping_highway | 100 | 0.94 of allowed (11.2 / 12.0 m/s) | 99.6 / 98.5 |
+| mixed_radius | 88.1 | 0.78 of allowed | 99.2 → 98.3 |
+| hairpin_15 | 88.3 | 0.84 of allowed, 31 % under 0.70 | 50.2 (cap-bound) |
+| hill_highway | **40.5** | 0.56 of allowed (6.2 / 11.2 m/s), 74 % under 0.70, curve cap binding | 99.5 → **94.8** |
+| s_loop | **31.2** | 0.49 of allowed (4.1 / 8.0 m/s), 98 % under 0.70, curve cap binding | 94.0 → **89.0** |
+
+**Consequence, intended:** hill_highway now FAILS the all-layers-≥ 95 rule (it passed at 60 % of the
+posted limit), and s_loop fails on two layers. Both are strict-xfail drift floors
+(`speed_compliance_score_red` in `GOLDEN_BELOW_FLOOR`) — the fix is the speed-owner consolidation
+and the lateral re-base, not tuning. Weighting (8 %) was my call pending the user's; one constant.
+Original gap analysis follows.
 
 **Scoring gap, raised by the user.** The stack is scored entirely on tracking
 accuracy and comfort. There is **no deduction anywhere for speed compliance,

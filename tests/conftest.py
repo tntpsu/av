@@ -50,12 +50,12 @@ BASELINE_SCORES: dict[str, float] = {
     # 2026-10-05 FINAL: goldens = first sweep on the real-time Unity player (clock ratio 1.00), scored
     # at the car; comfort metrics in real seconds. s_loop / hairpin_15 are truthful tight-curve values
     # (GOLDEN_BELOW_FLOOR). Pre-10-05 numbers are not comparable (synthetic 1/13 s clock).
-    "s_loop":           94.0,   # 2026-10-10: continuous critical cap (was 79.0 = step cap at Traj 79.6)
+    "s_loop":           89.0,   # 2026-10-11: SpeedCompliance 31 (0.49 of allowed); 10-10 continuous cap (was 79.0 step)
     "highway_65":       99.6,
     "hairpin_15":       50.2,   # 2026-10-10: continuous critical cap (was 59.0 = step cap at Traj 50.2)
-    "sweeping_highway": 98.3,
-    "mixed_radius":     99.2,
-    "hill_highway":     99.5,
+    "sweeping_highway": 98.5,   # 2026-10-11: SpeedCompliance layer (100) re-weights
+    "mixed_radius":     98.3,   # 2026-10-11: SpeedCompliance 88 (0.78 of allowed)
+    "hill_highway":     94.8,   # 2026-10-11: SpeedCompliance 40 (0.56 of allowed, curve cap binding 74 % of time)
 }
 
 # Per-track score tolerances (default 2.0). Wider for tracks with structural variance.
@@ -84,7 +84,16 @@ GOLDEN_BELOW_FLOOR: dict[str, dict[str, str]] = {
         "traj_yellow": "Trajectory 51.1 < 80",
         "lateral_p95": "at-car lateral P95 1.22 m > 0.40 m gate",
     },
+    # 2026-10-11 (T-SCORE-SPEED-COMPLIANCE): the new layer says what the utilisation line said for a
+    # month — these two tracks drive at half their allowed speed with the curve cap binding. Known
+    # truth, not a regression; fixed by the speed-owner consolidation / lateral re-base, not by tuning.
+    "hill_highway": {
+        "speed_compliance_score_red": "SpeedCompliance 40.5 < 60 — median 0.56 of allowed (6.2 vs 11.2 m/s), 74 % of eligible time under 0.70, curve cap binding",
+    },
 }
+GOLDEN_BELOW_FLOOR["s_loop"]["speed_compliance_score_red"] = (
+    "SpeedCompliance 31.2 < 60 — median 0.49 of allowed (4.1 vs 8.0 m/s), 98 % of eligible time under 0.70, curve cap binding"
+)
 
 
 def assert_or_known_floor(track_id: str, floor: str, ok: bool, message: str) -> None:

@@ -223,6 +223,21 @@ ACC_SCORE_CONV_TIME_PENALTY_CAP: float = 20.0    # pts max; also the deduction w
 # which made s_loop flip 79 ↔ 94 on a 0.8-pt Trajectory move; "continuous" = 100 at layer ≥ 80, linear to
 # 59 at 60, linear to 0 at 0 — same bands, no cliff.
 OVERALL_CRITICAL_CAP_MODE: str         = "continuous"
+
+# ── SpeedCompliance layer (T-SCORE-SPEED-COMPLIANCE, 2026-10-11) ─────────────────────────────────
+# Nothing scored whether the car did the job: hill_highway scored 99 at 60 % of its posted limit,
+# s_loop at 53 %. Seventh layer from tools/speed_utilization.py (v / min(limit, target) over eligible
+# frames: after start-up, not following a lead, not e-stopped, not braking toward a lower limit).
+# Absent (and weights fall back to the six-layer set) when < 30 eligible frames — ACC scenarios.
+SPEED_COMPLIANCE_LAYER_ENABLED: bool   = True
+SPEED_COMPLIANCE_WEIGHT: float         = 0.08    # the other six layers scale by (1 − this), as SignalIntegrity did
+SPEED_COMPLIANCE_FREE_RATIO: float     = 0.85    # median v/allowed at or above this is free
+SPEED_COMPLIANCE_PENALTY_PER_PCT: float = 2.0    # pts per 1 % of median shortfall below the free ratio (soft-capped)
+SPEED_COMPLIANCE_PENALTY_CAP: float    = 60.0
+SPEED_COMPLIANCE_UNDER_RATIO: float    = 0.70    # a frame below this fraction of allowed is "under-utilised"
+SPEED_COMPLIANCE_UNDER_FREE_PCT: float = 10.0    # % of eligible time under that ratio that is free
+SPEED_COMPLIANCE_UNDER_PENALTY_PER_PCT: float = 0.5
+SPEED_COMPLIANCE_UNDER_PENALTY_CAP: float = 40.0
 # ACC engage/disengage toggling (the H8 Night-58 mechanism: 27 edges in 120 s via out_of_cone
 # dropouts). Measured over the whole run, not ACC-active frames — a dropout removes itself from the
 # active mask, which is exactly why no other term saw it. Healthy pool 0–1 edges/min; hunting runs

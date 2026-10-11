@@ -54,6 +54,8 @@ from scoring_registry import (
     TIME_BASE_FIELDS,
     STEERING_JERK_PENALTY_CAP,
     OVERALL_CRITICAL_CAP_MODE,
+    SPEED_COMPLIANCE_LAYER_ENABLED,
+    SPEED_COMPLIANCE_WEIGHT,
     HEADING_PENALTY_FLOOR_DEG,
     ACC_COLLISION_GATE,
     ACC_TTC_CRITICAL_S,
@@ -10617,6 +10619,38 @@ def analyze_recording_summary(
         "SignalIntegrity": 0.08,
     }
 
+    # SpeedCompliance (T-SCORE-SPEED-COMPLIANCE, 2026-10-11): did the car use the road it was given?
+    # Absent when the run has too few eligible frames (ACC following, short runs) — then the six-layer
+    # weights above apply unchanged, exactly as before this layer existed.
+    speed_utilisation = None
+    speed_compliance = None
+    if SPEED_COMPLIANCE_LAYER_ENABLED:
+        try:
+            try:
+                from tools.speed_utilization import compute_speed_utilization, score_speed_compliance
+            except ImportError:
+                from speed_utilization import compute_speed_utilization, score_speed_compliance  # type: ignore
+            speed_utilisation = compute_speed_utilization(recording_path)
+            speed_compliance = score_speed_compliance(speed_utilisation)
+        except Exception as exc:  # scoring must never fail on a utilisation hiccup
+            speed_compliance = None
+            speed_utilisation = {"status": f"error: {exc!r}"[:160]}
+    if speed_compliance is not None:
+        sc_layer = {
+            "base_score": 100.0,
+            "deductions": [
+                {k: (safe_float(v) if k == "value" else v) for k, v in d.items()}
+                for d in speed_compliance["deductions"]
+            ],
+        }
+        sc_total = sum(float(d["value"]) for d in sc_layer["deductions"])
+        sc_layer["total_deduction"] = safe_float(sc_total)
+        sc_layer["final_score"] = safe_float(max(0.0, 100.0 - sc_total))
+        layer_breakdowns["SpeedCompliance"] = sc_layer
+        layer_scores["SpeedCompliance"] = sc_layer["final_score"]
+        layer_weights = {k: w * (1.0 - SPEED_COMPLIANCE_WEIGHT) for k, w in layer_weights.items()}
+        layer_weights["SpeedCompliance"] = SPEED_COMPLIANCE_WEIGHT
+
     weighted_contributions = {
         layer: safe_float(layer_scores.get(layer, 0.0) * weight)
         for layer, weight in layer_weights.items()
@@ -11398,6 +11432,7 @@ def analyze_recording_summary(
                 "overall_cap": critical_cap,
                 "cap_reason": cap_reason,
                 "cap_mode": OVERALL_CRITICAL_CAP_MODE,
+                "speed_utilisation": speed_utilisation,
                 "critical_layer_status": critical_layer_colors,
             },
         },

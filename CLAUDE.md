@@ -200,7 +200,10 @@ the overall critical-layer cap is continuous (`OVERALL_CRITICAL_CAP_MODE`; golde
 hairpin_15 50.2 — the old step cap had pinned them at 79.0/59.0), and the ACC composite scores
 post-convergence tracking vs the IDM equilibrium plus convergence time, sign flips beyond a deadband
 (0.315 m/s² accel, 2.0 m gap), engage/disengage edges, with soft-knee caps. Header `Expected:` gates
-are unchanged. **Never compare an overall score or an ACC composite across the 2026-10-10 boundary**;
+are unchanged. 2026-10-11: seventh layer **SpeedCompliance** (8 %, six others × 0.92) scores the
+utilisation metric; hill_highway (40) and s_loop (31) now fail the all-layers-≥ 95 rule for driving at
+half their allowed speed — known, strict-xfail floors, fixed by design work not tuning.
+**Never compare an overall score or an ACC composite across the 2026-10-10/11 boundary**;
 the kill-switches are the `ACC_SCORE_*` / `OVERALL_CRITICAL_CAP_MODE` constants in
 `tools/scoring_registry.py`.
 
@@ -211,6 +214,7 @@ the kill-switches are the `ACC_SCORE_*` / `OVERALL_CRITICAL_CAP_MODE` constants 
 | Lateral RMSE | ≤ 0.40 m |
 | Centered frames | ≥ 70% |
 | Emergency stops | 0 |
+| Speed vs allowed (median, SpeedCompliance layer) | ≥ 0.85 of min(limit, target); ≤ 10 % of eligible time under 0.70 |
 
 ---
 
