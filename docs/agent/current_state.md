@@ -1,7 +1,20 @@
 # AV Stack — Agent Memory: Current State
 
-**Last updated:** 2026-10-09
+**Last updated:** 2026-10-11
 **Current milestone:** S2-M1 — **5 of 5 tracks still meeting all-layers-≥95 goal.** ACC emergency brake authority restored on G2 (885 → 2 e-stops, 99.8% reduction) via plan `acc-idm-accel-plumbing.md`. Frenet-frame MPC reference remains in shadow-mode.
+
+## 2026-10-10/11 — Scorer work-package step 1: the score now measures the job
+
+Night-59 (first 14/14 ACC PASS) read 5–15 pts below the overlay stack it replaced for scorer
+reasons, and the composite had never seen the H8 hunting. Landed, all kill-switched in
+`scoring_registry`: post-convergence ACC Tracking vs the IDM equilibrium + convergence time; sign-flip
+deadbands (0.315 m/s², 2.0 m); soft-knee caps; ACC engage/disengage edge term; IDM-equilibrium
+validity guard; continuous overall critical cap (s_loop 79 ↔ 94 cliff gone); and the **SpeedCompliance
+layer** (8 %) from the utilisation metric. Honest consequences: hill_highway 99.5 → 94.8 (drives at
+0.56 of allowed, now fails the layer rule), s_loop 94.0 → 89.0, hairpin 59.0 → 50.2 (red Trajectory
+no longer capped up). ACC pool: steady scenarios 100, H8 96, A2 98, G1 97; archived hunting/limit-cycle
+runs rank below them. Scores before 2026-10-10/11 are not comparable. Open in the package:
+T-METRIC-MSDV-WIRE, T-METRIC-ACC-DROPOUT-FRAMES. Next: speed-owner consolidation design note.
 
 ## 2026-10-09 — Launch freeze found in the base; ACC highway scenarios now run the production stack
 
