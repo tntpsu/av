@@ -1,7 +1,7 @@
 # AV Stack — Agent Memory: Current State
 
 **Last updated:** 2026-10-11
-**Current milestone:** S2-M1 — **5 of 5 tracks still meeting all-layers-≥95 goal.** ACC emergency brake authority restored on G2 (885 → 2 e-stops, 99.8% reduction) via plan `acc-idm-accel-plumbing.md`. Frenet-frame MPC reference remains in shadow-mode.
+**Current milestone:** S2-M1 — **1 of 6 tracks meets the all-layers-≥95 bar (highway_65) as of 2026-10-11**, after the scorer started measuring at-car lateral error (09-28), the real clock (10-05) and speed compliance (10-11). The "5 of 5" of early October was the lookahead frame and a scorer with no task-completion term. ACC emergency brake authority restored on G2 (885 → 2 e-stops, 99.8% reduction) via plan `acc-idm-accel-plumbing.md`. Frenet-frame MPC reference remains in shadow-mode.
 
 ## 2026-10-10/11 — Scorer work-package step 1: the score now measures the job
 

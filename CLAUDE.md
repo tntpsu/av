@@ -202,7 +202,9 @@ post-convergence tracking vs the IDM equilibrium plus convergence time, sign fli
 (0.315 m/s² accel, 2.0 m gap), engage/disengage edges, with soft-knee caps. Header `Expected:` gates
 are unchanged. 2026-10-11: seventh layer **SpeedCompliance** (8 %, six others × 0.92) scores the
 utilisation metric; hill_highway (40) and s_loop (31) now fail the all-layers-≥ 95 rule for driving at
-half their allowed speed — known, strict-xfail floors, fixed by design work not tuning.
+half their allowed speed — known, strict-xfail floors, fixed by design work not tuning. mixed_radius
+(88–95, at 0.78–0.82 of allowed) and hairpin_15 (79–88) also sit below 95 on this layer; only
+highway_65 and sweeping_highway are at 100. On 2026-10-11 numbers, 1 of 6 tracks passes every layer.
 **Never compare an overall score or an ACC composite across the 2026-10-10/11 boundary**;
 the kill-switches are the `ACC_SCORE_*` / `OVERALL_CRITICAL_CAP_MODE` constants in
 `tools/scoring_registry.py`.
