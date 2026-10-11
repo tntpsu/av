@@ -857,5 +857,31 @@
   ],
   "superseded_by": null,
   "resolved_by": null
+ },
+ {
+  "date": "2026-10-11",
+  "target_metric": "LMPC stability margin at speed (T-LATERAL-LMPC-SPEED-MARGIN)",
+  "target_track": "highway_65 (ID), mixed_radius R200 (reproducer)",
+  "approach": "Closed-loop plant ID with a known multisine steering injection after the controller (new tools), 10 runs at 7.6-13.5 m/s on straight and R200; calibrated offline oracle to rank fixes; Unity A/B of the top candidate (mpc_actuator_model_enabled, tau 0.25) on the reproducer with the 0.08 g budget, 5 pairs.",
+  "fix_level": "ARCHITECTURE (controller model) — candidate, not promoted",
+  "hypothesis": "The LMPC's unmodelled 0.25 s actuator lag (-33 deg at the 0.45 Hz mode) and 0.65-0.85x actuator gain, not vehicle dynamics, take the loop to unity gain between 9.8 and 11.6 m/s on R200.",
+  "outcome": "MIXED",
+  "outcome_status": "OPEN",
+  "metric_before": 3,
+  "metric_after": 0,
+  "root_cause_of_failure": null,
+  "root_cause_detail": "Plant = kinematic + understeer (0.87-1.0 of model, same in-curve as straight); actuator gain 0.65-0.85x model, tau 0.22-0.27 s; sensitivity peak 6-16x at 7.6-11.6, 17-67x at 13.5 (rate limiter binds 30-38 % of frames, r_steer_rate scheduling doubles above 12). Oracle: actuator model cuts the peak 2-3x; gain-only / r_steer_rate: no effect. Unity A/B on the reproducer: OOL 3/5 -> 0/5, P95 1.13 -> 0.37 m, steering p95 0.48 -> 0.11, overall 68 -> 96. Next: 6-track regression at legacy speeds, then promote, then re-run P1 step 1. | Six-track regression at legacy speeds (3 pairs each): actuator model ON adds a steady under-steer offset in every LMPC curve (highway R500 0.037->0.089, sweeping 0.149->0.269, hill R100 0.059->0.221, mixed 0.085->0.135 at-car RMSE), PP tracks unchanged, OOL 0 everywhere, steering p95 /3-4. NOT promoted. Hypothesis: lag model at gain 1.0 vs plant gain 0.65-0.85 slows the feedback correction of the existing under-steer; the oracle does not reproduce it -> needs a replay harness through the production pid_controller LMPC path.",
+  "iterations_spent": 2,
+  "files_changed": [
+   "tools/sysid_injection.py",
+   "tools/analyze/sysid_steer_injection.py",
+   "tools/analyze/lmpc_closed_loop_oracle.py",
+   "av_stack/orchestrator.py",
+   "config/av_stack_config.yaml",
+   "config/exp_sysid*.yaml",
+   "tests/test_sysid_injection.py"
+  ],
+  "superseded_by": null,
+  "resolved_by": null
  }
 ]

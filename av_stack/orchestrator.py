@@ -1510,6 +1510,15 @@ class AVStack:
         )
         self._curvature_source_candidate: Optional[str] = None
         self._curvature_source_candidate_frames: int = 0
+        # Plant-identification steering excitation (experiment.steering_injection; default disabled)
+        try:
+            from tools.sysid_injection import InjectionConfig as _InjCfg
+            self._steering_injection = _InjCfg.from_config(config)
+        except Exception:  # tooling import must never break the stack
+            self._steering_injection = None
+        self._steering_injection_t0: Optional[float] = None
+        self.last_speed_for_injection: float = 0.0
+        self._steering_injection_log: list = []
         self._curvature_source_switch_on_frames = max(
             1, int(trajectory_cfg.get("curvature_source_switch_on_frames", 3))
         )
@@ -7251,6 +7260,7 @@ class AVStack:
                 self._velocity_profile, self._track_odometer_m
             )
 
+        self.last_speed_for_injection = float(current_speed) if isinstance(current_speed, (int, float)) else 0.0
         # --- Speed Governor: single call replaces 12 serial suppression layers ---
         gov_output: SpeedGovernorOutput = self.speed_governor.compute_target_speed(
             track_speed_limit=effective_track_limit,
@@ -9694,8 +9704,28 @@ class AVStack:
         # Ground truth follower will send its own control command
         if not (hasattr(self, '_gt_control_override') and self._gt_control_override is not None):
             # Only send control if NOT in ground truth mode
+            steering_to_send = float(control_command['steering'])
+            # Plant-identification excitation (experiment.steering_injection, default OFF):
+            # a known multisine added AFTER the controller so the plant sees it as an external
+            # disturbance while the controller keeps the lane. control/steering stays the controller's
+            # command; vehicle/steering_input records what Unity received. T-LATERAL-LMPC-SPEED-MARGIN.
+            _inj = getattr(self, '_steering_injection', None)
+            if _inj is not None and _inj.enabled:
+                _now = time.monotonic()
+                if self._steering_injection_t0 is None:
+                    self._steering_injection_t0 = _now
+                _r = _inj.value(_now - self._steering_injection_t0, float(control_command.get('speed_now', self.last_speed_for_injection)))
+                if _r != 0.0 and not getattr(self, '_steering_injection_logged', False):
+                    logger.warning(f"[Frame {self.frame_count}] STEERING INJECTION ACTIVE: multisine amp {_inj.amplitude} "
+                                   f"{_inj.f_min_hz}-{_inj.f_max_hz} Hz x{_inj.n_tones} for {_inj.duration_s} s — plant-ID run, not a production drive")
+                    self._steering_injection_logged = True
+                control_command['steering_injection'] = _r
+                steering_to_send = float(np.clip(steering_to_send + _r, -1.0, 1.0))
+                # Sidecar log (frame-exact): written next to the recording at stop() as
+                # data/reports/sysid/injection_<recording>.npz — the analysis prefers it over regeneration.
+                self._steering_injection_log.append((int(self.frame_count), float(self.last_vehicle_unity_time if self.last_vehicle_unity_time is not None else float('nan')), float(_now), float(_r), float(steering_to_send)))
             self.bridge.set_control_command(
-                steering=control_command['steering'],
+                steering=steering_to_send,
                 throttle=control_command['throttle'],
                 brake=control_command['brake']
             )
@@ -12904,6 +12934,15 @@ class AVStack:
             logger.info(f"Closing data recorder: {self.recorder.output_file}")
             self.recorder.close()
             logger.info(f"Recorded {self.frame_count} frames")
+            if getattr(self, '_steering_injection_log', None):
+                try:
+                    _out = Path('data/reports/sysid'); _out.mkdir(parents=True, exist_ok=True)
+                    _arr = np.array(self._steering_injection_log, dtype=float)
+                    _f = _out / f"injection_{Path(str(self.recorder.output_file)).stem}.npz"
+                    np.savez(_f, frame=_arr[:, 0], unity_time=_arr[:, 1], mono=_arr[:, 2], r=_arr[:, 3], steering_sent=_arr[:, 4])
+                    logger.warning(f"Steering-injection sidecar written: {_f} ({len(_arr)} frames)")
+                except Exception as _e:
+                    logger.warning(f"Could not write steering-injection sidecar: {_e}")
         
         logger.info(f"AV Stack stopped (processed {self.frame_count} frames)")
 

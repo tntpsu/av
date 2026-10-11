@@ -947,7 +947,7 @@ trajectory:
     mpc_ff_decomposition_enabled: true
     # Steering actuator model
     mpc_actuator_model_enabled: false
-    mpc_actuator_tau_s: 0.70
+    mpc_actuator_tau_s: 0.25
     mpc_actuator_rate_limit_deg_per_s: 90.0
     mpc_q_actuator: 0.0
     mpc_delta_rate_max: 0.15        # max Δδ_norm per step
@@ -1253,3 +1253,15 @@ acc:
   # every gap gate fires after contact. Subtracted in ForwardRadarSensor.
   # Kill-switch: 0.0 = legacy frame. Reproducer: tests/test_acc_closedloop.py
   radar_range_offset_m: 4.43
+
+# ── Experiments (never on in production; overlays config/exp_*.yaml switch them on) ─────────────────
+experiment:
+  steering_injection:                 # T-LATERAL-LMPC-SPEED-MARGIN plant ID — see tools/sysid_injection.py
+    enabled: false
+    amplitude: 0.10                   # normalised steering peak (≈1.6° at 12 m/s)
+    f_min_hz: 0.15
+    f_max_hz: 1.50
+    n_tones: 12
+    start_s: 12.0
+    duration_s: 50.0
+    min_speed_mps: 3.0

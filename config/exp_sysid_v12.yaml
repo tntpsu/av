@@ -1,0 +1,15 @@
+# Plant-identification run at 12 m/s (T-LATERAL-LMPC-SPEED-MARGIN, 2026-10-11). NOT a production config.
+# highway_65, 70 s: controller active, multisine steering excitation added after the controller
+# (tools/sysid_injection.py). Analyse with tools/analyze/sysid_steer_injection.py.
+trajectory:
+  target_speed: 12.0
+  mpc:
+    mpc_v_max: 15.0
+control:
+  longitudinal:
+    max_speed: 14.0
+safety:
+  max_speed: 14.0
+experiment:
+  steering_injection:
+    enabled: true

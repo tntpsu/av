@@ -126,6 +126,70 @@ steer gain) + actuator lag (τ 0.25, `mpc_actuator_model_enabled`) — the oracl
 (4) resume T-SPEED-OWNER-CONSOLIDATION P1. April's actuator-model and dynamic-model verdicts were made
 on the synthetic clock (dt 1.5× wrong) and at 0.05 g speeds — re-test, do not carry them over.
 
+**Plant identified 2026-10-11 (closed-loop multisine injection, `tools/sysid_injection.py` +
+`tools/analyze/sysid_steer_injection.py`; 10 runs, highway_65 straight at 7.6/9.7/11.6/13.5 m/s and
+mixed_radius R200 at 7.6/9.6; results `data/reports/sysid/sysid_2026-10-11_highway_mixed.json`):**
+
+| run | lateral per rad of actual steer (0.33–0.58 Hz) | kinematic+understeer+actuator model | actuator gain °/unit (model) | loop sensitivity peak |
+|---|---|---|---|---|
+| 7.6 straight | 1.73 m | 1.97 | 16.0 (19.6) | 9× @ 0.40 Hz |
+| 9.7 straight | 2.60 m | 2.80 | 13.1 (18.6) | 16× @ 0.50 |
+| 11.6 straight | 3.56 m | 3.57 | 14.0 (16.4) | 6× @ 0.40 |
+| 13.5 straight | 4.14 m | 4.24 | 10.4 (16.0) | **17–67× @ 0.40–0.43** |
+| 9.6 on the R200 | 2.42 m | 2.77 | 12.3 | 14× @ 0.40 |
+| 7.6 on the R200 | 1.37 m | 1.96 | 14.6 | 18× @ 0.50 |
+
+So: the vehicle IS the kinematic + understeer model (0.87–1.0 of it above 9 m/s; same in the curve as on
+the straight — the earlier "2.4×" was a low-amplitude artefact); the **actuator delivers 0.65–0.85 of the
+modelled steer angle per unit**, worst at 13.5 m/s, with **τ = 0.22–0.27 s** (Unity `steeringTimeConstant`
+0.25) and a 100 ms pipeline delay (80 compensated). The loop sensitivity at 0.4–0.5 Hz rises to the
+stability boundary at 13.5 m/s on the highway (the S2-M4 "15 m/s not achievable" finding, measured),
+helped by two stack elements that engage with speed: the per-frame steering rate limiter (binding 1 %
+of frames at 7.6, 19 % at 11.6, 30–38 % at 13.6) and `mpc_r_steer_rate` scheduling (2.0 → 3.7 above
+12 m/s). Calibrated oracle `tools/analyze/lmpc_closed_loop_oracle.py` reproduces |P_d| within 10–20 %
+and the 5–7× peaks at 7.6–11.6, and ranks fixes: **modelling the actuator (τ 0.25) in the MPC cuts the
+sensitivity peak 2–3× at every speed**; a gain-only correction or r_steer_rate changes do nothing.
+Candidate under Unity A/B (mixed_radius reproducer, budget 0.08 g, `mpc_actuator_model_enabled`
+false → true at τ 0.25, 5 pairs): **A/B 2026-10-11 11:38–11:50, mixed_radius, budget 0.08 g (R200 at 11.6 m/s):**
+
+| arm | out of lane | at-car RMSE / P95 / max | steering p95 on the R200 | Trajectory | overall |
+|---|---|---|---|---|---|
+| actuator model OFF (production) | **3 of 5** | 0.40 / 1.13 / 1.20 m | 0.48 | 66 | 68 |
+| actuator model ON, τ 0.25 | **0 of 5** | 0.22 / 0.37 / 0.40 m | 0.11 | 89 | 96 |
+
+The MPC that knows about the 0.25 s actuator asks for 4× less steering and stays in lane where the
+production MPC leaves it. Not promoted yet: a controller-wide change needs the six-track regression at
+legacy speeds, then P1 step 1 is re-run with it.
+
+**Six-track regression at legacy speeds (2026-10-11 11:52–12:35, 3 pairs each, actuator model OFF → ON, τ 0.25):**
+
+| track (regime) | at-car RMSE off → on | P95 | steering p95 | Trajectory | OOL |
+|---|---|---|---|---|---|
+| highway_65 (LMPC, R500 @ 11.6) | 0.037 → **0.089** | 0.11 → 0.26 | 0.05 → 0.05 | 98.2 → 95.5 | 0 / 0 |
+| sweeping_highway (LMPC, R300 @ 11.6) | 0.149 → **0.269** | 0.35 → 0.41 | 0.36 → 0.10 | 92.6 → 86.2 | 0 / 0 |
+| hill_highway (LMPC, R100 @ 6.6) | 0.059 → **0.221** | 0.11 → 0.34 | 0.28 → 0.21 | 97.1 → 89.0 | 0 / 0 |
+| mixed_radius (legacy 0.05 g, R200 @ 9.8) | 0.085 → 0.135 | 0.17 → 0.22 | 0.24 → 0.10 | 95.8 → 93.3 | 0 / 0 |
+| s_loop / hairpin_15 (PP regime) | unchanged | unchanged | unchanged | unchanged | 0 / 0 |
+
+**Verdict: NOT promoted** (`mpc_actuator_model_enabled` stays `false`; `mpc_actuator_tau_s` set to the
+measured 0.25 for when it is). The lag model buys the stability margin (reproducer 3/5 → 0/5 OOL,
+steering activity ÷3–4) at the price of a **steady-state under-steer offset in every LMPC curve**: on
+highway_65 the mean error on the R500 arcs goes +0.10 → +0.22 m while straights stay at 0.000. The
+production MPC already under-steers in curves by the actuator gain mismatch (plant 0.65–0.85 of the
+modelled angle per unit) and corrects it through weak feedback (q_lat 1.0); with the actuator state in
+the QP (heading row integrates the modelled angle at gain 1.0, `mpc_controller.py` ~1107–1135, FF
+alignment on the command ~1271) the correction gets slower and the offset doubles. The calibrated
+oracle does NOT reproduce the offset (it predicts bias −0.03 → −0.01), so the mechanism above is a
+hypothesis pointing at the production FF/gain path, not a measurement. April's "regresses at all τ"
+verdict was right about the symptom and wrong about the cause ("Smith predictor already handles delay").
+
+**Next (item 3, concrete):** (1) make the actuator model gain-consistent — the actuator state must reach
+`gain(v)·u`, with `gain(v)` the measured 0.65–0.85 map (`steer_gain_ratio` exists but only feeds the
+dynamic-model path), and the FF/alignment must use the same gain; (2) build a replay harness through the
+production `pid_controller` LMPC path (the oracle bypasses it, which is where the offset lives); (3) re-run
+both reproducers — mixed_radius R200 @ 11.6 (margin, OOL guard) and highway_65 R500 @ 11.6 (offset,
+arc-mean error ≤ +0.10); (4) then the six tracks; then P1 step 1.
+
 ### T-METRIC-ACC-COMPOSITE-2026-10 — scorer work-package step 1 (2026-10-10, DONE; one item open)
 
 Motivation: Night-59 scored the first 14/14 ACC PASS 5–15 pts *lower* than the overlay stack it

@@ -1,0 +1,18 @@
+# Plant-identification run, set 2 (stronger, narrower excitation) at 8 m/s — T-LATERAL-LMPC-SPEED-MARGIN.
+# NOT a production config. Set 1 (0.10 peak, 12 tones 0.15-1.5 Hz) gave < 7 dB SNR above 0.4 Hz.
+trajectory:
+  target_speed: 8.0
+  mpc:
+    mpc_v_max: 15.0
+control:
+  longitudinal:
+    max_speed: 10.0
+safety:
+  max_speed: 14.0
+experiment:
+  steering_injection:
+    enabled: true
+    amplitude: 0.25
+    f_min_hz: 0.20
+    f_max_hz: 1.00
+    n_tones: 8
