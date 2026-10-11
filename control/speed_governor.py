@@ -58,6 +58,10 @@ class SpeedGovernorConfig:
 
     # Comfort governor
     comfort_governor_max_lat_accel_g: float = 0.20
+    # T-SPEED-OWNER-CONSOLIDATION P1 (2026-10-11): when the unified trajectory.lateral_accel_budget_g
+    # is enabled, comfort and preview read it (scale 1.0) while the curve-cap estimator keeps the
+    # legacy comfort value here so the cap's behaviour is unchanged until P2 retires it.
+    curve_cap_comfort_lat_accel_g: Optional[float] = None
     comfort_governor_min_speed: float = 3.0
     curvature_calibration_scale: float = 1.0
     curvature_history_frames: int = 5
@@ -429,13 +433,17 @@ class SpeedGovernor:
             profile_active=profile_active_flag,
         )
 
-    def _compute_comfort_speed(self, curvature: float) -> float:
+    def _curve_cap_comfort_g(self) -> float:
+        c = self.config.curve_cap_comfort_lat_accel_g
+        return float(c) if c is not None else float(self.config.comfort_governor_max_lat_accel_g)
+
+    def _compute_comfort_speed(self, curvature: float, a_lat_g: Optional[float] = None) -> float:
         """Physics-based comfortable speed: v = sqrt(a_lat_max / (|k| * scale))."""
         abs_curv = abs(float(curvature)) if isinstance(curvature, (int, float)) else 0.0
         scaled_curv = abs_curv * self.config.curvature_calibration_scale
         if scaled_curv < 1e-6:
             return float("inf")
-        a_lat_max = self.config.comfort_governor_max_lat_accel_g * G
+        a_lat_max = (float(a_lat_g) if a_lat_g is not None else self.config.comfort_governor_max_lat_accel_g) * G
         v_comfort = math.sqrt(a_lat_max / scaled_curv)
         return max(v_comfort, self.config.comfort_governor_min_speed)
 
@@ -524,9 +532,9 @@ class SpeedGovernor:
             feasibility = compute_turn_feasibility(
                 speed_mps=max(float(current_target), float(current_speed)),
                 curvature_abs=k_used,
-                comfort_limit_g=self.config.comfort_governor_max_lat_accel_g,
+                comfort_limit_g=self._curve_cap_comfort_g(),
                 peak_limit_g=max(
-                    self.config.comfort_governor_max_lat_accel_g,
+                    self._curve_cap_comfort_g(),
                     self.config.curve_cap_peak_lat_accel_g,
                 ),
                 use_peak_bound=True,
@@ -536,7 +544,7 @@ class SpeedGovernor:
             )
             curve_speed = float(feasibility.speed_limit_mps)
         else:
-            curve_speed = self._compute_comfort_speed(k_used)
+            curve_speed = self._compute_comfort_speed(k_used, a_lat_g=self._curve_cap_comfort_g())
 
         if not math.isfinite(curve_speed) or curve_speed <= 0.0:
             self._curve_cap_last_speed = None
@@ -695,21 +703,41 @@ class SpeedGovernor:
         return horizon_speed, True, margin, eff_horizon, full_diag
 
 
+def unified_lateral_accel_budget_g(trajectory_cfg: dict) -> Optional[float]:
+    """The single lateral-accel budget (g) when `trajectory.lateral_accel_budget_enabled` is true,
+    else None (legacy per-owner values apply). T-SPEED-OWNER-CONSOLIDATION P1."""
+    if not isinstance(trajectory_cfg, dict) or not bool(trajectory_cfg.get("lateral_accel_budget_enabled", False)):
+        return None
+    try:
+        g = float(trajectory_cfg.get("lateral_accel_budget_g", 0.08))
+    except (TypeError, ValueError):
+        return None
+    return g if g > 0.0 else None
+
+
 def build_speed_governor(trajectory_cfg: dict, speed_planner_cfg: dict) -> SpeedGovernor:
     """Build a SpeedGovernor from the config dictionaries."""
     gov_cfg_section = trajectory_cfg.get("speed_governor", {})
 
+    # T-SPEED-OWNER-CONSOLIDATION P1: one lateral-accel budget for every owner that computes
+    # v = sqrt(a_lat / kappa) — velocity profile (orchestrator), comfort governor, curve preview.
+    # Legacy: comfort 0.20 g / curvature_calibration_scale 2.5 = 0.08 g effective; profile 0.05 g.
+    legacy_comfort_g = float(gov_cfg_section.get("comfort_governor_max_lat_accel_g", 0.20))
+    legacy_scale = float(gov_cfg_section.get("curvature_calibration_scale", 1.0))
+    budget_g = unified_lateral_accel_budget_g(trajectory_cfg)
+    comfort_g = budget_g if budget_g is not None else legacy_comfort_g
+    scale = 1.0 if budget_g is not None else legacy_scale
+    # The curve-cap estimator keeps the legacy comfort limit until P2 retires the cap.
+    cap_comfort_g = legacy_comfort_g if budget_g is not None else None
+
     gov_config = SpeedGovernorConfig(
-        comfort_governor_max_lat_accel_g=float(
-            gov_cfg_section.get("comfort_governor_max_lat_accel_g", 0.20)
-        ),
+        comfort_governor_max_lat_accel_g=comfort_g,
+        curve_cap_comfort_lat_accel_g=cap_comfort_g,
         comfort_governor_min_speed=float(
             gov_cfg_section.get("comfort_governor_min_speed",
                                 trajectory_cfg.get("min_speed_floor", 3.0))
         ),
-        curvature_calibration_scale=float(
-            gov_cfg_section.get("curvature_calibration_scale", 1.0)
-        ),
+        curvature_calibration_scale=scale,
         curvature_history_frames=int(
             gov_cfg_section.get("curvature_history_frames", 5)
         ),

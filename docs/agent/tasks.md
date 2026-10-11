@@ -62,6 +62,40 @@ arbiter + symmetric IDM routing (harness re-fit first) → P4 dead-config purge.
 Also 2026-10-11: A1/A2 `Expected:` lines rewritten to what the scenarios can test at a 12 m/s target
 (NMPC/regime-transition clauses deferred to Stage-2 speed expansion).
 
+**P1 step 1 A/B (2026-10-11 09:00–09:54, `lateral_accel_budget_enabled` false → true at 0.08 g,
+5 pairs per curve track, 3 on highway_65, 60 s):**
+
+| track | profile floor | v_med | SpeedCompliance | at-car RMSE / P95 | Traj | overall | OOL / e-stop |
+|---|---|---|---|---|---|---|---|
+| s_loop | 4.4 → 5.6 | 4.4 → 5.3 | 34.7 → 48.6 | **0.340 → 0.318** / 0.48 → 0.46 | 80.3 → 82.1 | 89.7 → 91.3 | 0 / 0 |
+| hill_highway | 7.0 → 8.9 | 6.7 → 8.6 | 44.0 → 86.0 | 0.047 → 0.136 / 0.09 → 0.24 | 97.6 → 93.2 | 94.7 → 96.4 | 0 / 0 |
+| hairpin_15 | 2.7 → 3.4 | 3.5 → 3.9 | 90.4 → 96.6 | 0.582 → 0.616 / 1.18 → 1.26 | 51.0 → 50.0 | 50.1 → 49.2 | 0 / 0 |
+| mixed_radius | 4.4 → 5.6 (R200 9.9 → 12) | 9.8 → 11.6 | 94.4 → 100 | 0.087 → **0.45** / 0.19 → **1.2** | 95.6 → 60 | 97.1 → **51** | **3 of 4 OOL** / 0 |
+| highway_65 (control) | 12 → 12 | 11.6 → 11.6 | 100 → 100 | 0.036 → 0.036 | 98.2 → 98.2 | 99.3 → 99.3 | 0 / 0 |
+
+**Decision: NOT promoted.** The out-of-lane guard fired on mixed_radius. The flag stays `false`; the
+infrastructure (one budget consumed by profile + comfort + preview, curve cap untouched, tests) is
+committed. The ladder resumes only after T-LATERAL-LMPC-SPEED-MARGIN below is fixed — the budget is
+physics, lowering it again would re-create the proxy.
+
+### T-LATERAL-LMPC-SPEED-MARGIN — LMPC lightly damped on R200 at ≥ 11 m/s; PP saturates at the exit (2026-10-11, reproducer)
+
+Found by P1 step 1 on mixed_radius. With the R200 driven at 11.6 m/s (profile budget 0.08 g) instead
+of 9.8 m/s (0.05 g): a 0.36–0.47 Hz lateral mode that is present at both speeds grows ×2.6–2.8 across
+the curve at 11.6 (at-car error std 0.08 → 0.22–0.35 m, steering p95 0.27 → 0.55) and holds constant
+at 9.8 (×1.0–1.3, steering p95 0.20–0.28). The regime hands off LMPC → PP at the curve exit (514 m)
+mid-swing; PP saturates at ±0.70 within 2–3 cycles and the car leaves the lane on the straight at
+536–582 m (3 of 4 runs; the other reached the R60 with |d| 0.7–0.8 m). Consistent neighbours:
+highway_65 R500 at 11.6 is clean (0.036 m); sweeping_highway R300 at 11.6 shows LMPC P95 0.57 m
+(the standing Trajectory 92.8 flag). So the LMPC's damping margin falls with curvature at ~11.6 m/s
+and crosses zero around R200. **Reproducer:** `trajectory.lateral_accel_budget_enabled: true`,
+`lateral_accel_budget_g: 0.08`, `tracks/mixed_radius.yml`, 60 s; recordings 20261011_092232 /
+_092449 / _092920 (OOL) vs _092124 / _092340 (A arm). This is roadmap item 3's first concrete,
+safety-relevant target: characterise the loop's damping vs speed and curvature offline
+(`tools/analyze/replay_control_locked.py`, the sysid tool, `control/mpc_tire_understeer_gradient`
+telemetry), then fix in the controller (model/plant, speed-scheduled weights) — not by lowering the
+speed budget, which is how the 0.05 g proxy came to exist.
+
 ### T-METRIC-ACC-COMPOSITE-2026-10 — scorer work-package step 1 (2026-10-10, DONE; one item open)
 
 Motivation: Night-59 scored the first 14/14 ACC PASS 5–15 pts *lower* than the overlay stack it
@@ -1069,6 +1103,14 @@ Recommend (a) now, (c) as the architecture item it already is. Start:
 same cap) and `grep -n a_lat_tracking_budget_g config/av_stack_config.yaml av_stack/orchestrator.py`.
 
 ### T-SWEEP-HW-REGRESSION — sweeping_highway 96.9 → 79.0 (2026-08-12)
+
+**2026-10-11 read-only diagnosis of the standing "Trajectory 92.8" flag (nights 144–150):** fresh
+2026-10-09 run vs the 10-05 golden — at-car RMSE 0.143 vs 0.120 m, P95 0.34 vs 0.27 m, speed P50 11.6
+vs 11.2 m/s, LMPC regime 96 % in both. The +0.4 m/s is the 10-09 curve-cap promotion
+(`curve_cap_only_when_binding`), and the LMPC's R300 tracking error grew with it: 94.0 → 92.8 is the
+lateral ceiling (roadmap item 3) exposed by driving faster, which T-SPEED-OWNER-CONSOLIDATION P1 will
+do more of. Not variance, not a new defect, not a drift-floor entry (the floors are 60/80; 92.8 only
+misses the ≥ 95 pass bar). Do not tune; it moves when the lateral loop is re-based.
 
 **2026-09-26 fresh daytime sweep: non-reproducing again.** sweeping_highway 98.1
 (Traj 92.9) on a fresh 60 s run with today's code. Three fresh runs since Aug-13

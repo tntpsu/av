@@ -1656,9 +1656,13 @@ class AVStack:
                     try:
                         gov_cfg_section = self.trajectory_config.get('speed_governor', {})
                         vp_section = self.trajectory_config.get('velocity_profiler', {})
-                        # Use controller tracking budget (calibrated from closed-loop data),
-                        # NOT the tire/comfort limit. Falls back to comfort limit if not set.
-                        a_lat_max_g = float(vp_section.get(
+                        # T-SPEED-OWNER-CONSOLIDATION P1 (2026-10-11): one lateral budget shared with the
+                        # comfort governor and curve preview when enabled. Legacy: the 0.05 g "controller
+                        # tracking budget" — a PP-capability proxy that held s_loop at 4.1 and hill at
+                        # 6.2 m/s (SpeedCompliance 31 / 40).
+                        from control.speed_governor import unified_lateral_accel_budget_g
+                        _budget_g = unified_lateral_accel_budget_g(self.trajectory_config)
+                        a_lat_max_g = _budget_g if _budget_g is not None else float(vp_section.get(
                             'a_lat_tracking_budget_g',
                             gov_cfg_section.get('comfort_governor_max_lat_accel_g', 0.20),
                         ))

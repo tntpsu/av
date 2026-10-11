@@ -834,5 +834,28 @@
   ],
   "superseded_by": null,
   "resolved_by": null
+ },
+ {
+  "date": "2026-10-11",
+  "target_metric": "SpeedCompliance via one lateral-accel budget (T-SPEED-OWNER-CONSOLIDATION P1 step 1)",
+  "target_track": "s_loop, hill_highway, mixed_radius, hairpin_15, highway_65",
+  "approach": "trajectory.lateral_accel_budget_enabled false -> true at 0.08 g (profile 0.05 -> 0.08; comfort/preview neutral; curve cap untouched). run_ab_batch 5 pairs per curve track, 3 on highway, 60 s. Guard: OOL = 0, e-stop = 0.",
+  "fix_level": "CONFIG (base, kill-switched)",
+  "hypothesis": "The profile's 0.05 g tracking budget is a PP-capability proxy; raising it toward comfort lifts SpeedCompliance without safety loss.",
+  "outcome": "MIXED",
+  "outcome_status": "BLOCKED",
+  "metric_before": 44.0,
+  "metric_after": 86.0,
+  "root_cause_of_failure": "LMPC lightly damped on R200 at 11.6 m/s (0.4 Hz mode grows x2.6-2.8 along the curve), PP saturates at the hand-off; OOL 3/4 on mixed_radius",
+  "root_cause_detail": "s_loop 34.7->48.6 with at-car RMSE 0.340->0.318 (better); hill 44->86, RMSE 0.047->0.136, Traj 97.6->93.2; hairpin 90->97, RMSE 0.58->0.62; highway control identical; mixed_radius 3/4 runs out of lane on the straight after the R200 (od 536-582) at 11.6 m/s. Not promoted; flag false; T-LATERAL-LMPC-SPEED-MARGIN filed with recordings 20261011_092232/_092449/_092920 vs _092124/_092340.",
+  "iterations_spent": 1,
+  "files_changed": [
+   "control/speed_governor.py",
+   "av_stack/orchestrator.py",
+   "config/av_stack_config.yaml",
+   "tests/test_lateral_accel_budget.py"
+  ],
+  "superseded_by": null,
+  "resolved_by": null
  }
 ]

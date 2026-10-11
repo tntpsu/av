@@ -95,6 +95,13 @@ Guard: out-of-lane 0, e-stops 0, at-car lateral RMSE reported per track (s_loop/
 toward the PP ceiling — report it as the item-3 defect, do not back off the budget to hide it unless
 OOL/e-stop fire). Expected: hill_highway SpeedCompliance 40 → ≥ 85 by 0.16 g; s_loop 31 → 60–75.
 
+**P1 step 1 result (2026-10-11):** s_loop SpeedCompliance 35 → 49 with *better* lateral (0.340 → 0.318 m);
+hill_highway 44 → 86 (RMSE 0.047 → 0.136); hairpin 90 → 97; highway unchanged; **mixed_radius 3 of 4
+runs out of lane** — the LMPC is lightly damped on R200 at 11.6 m/s and PP saturates at the exit
+(T-LATERAL-LMPC-SPEED-MARGIN). Guard fired → not promoted, flag stays off, infrastructure committed.
+**P1 is gated on roadmap item 3** for R200-class curves at ≥ 11 m/s. Do not resume the ladder with a
+lower budget: that re-creates the proxy.
+
 **P2 — decouple lateral signals from speed owners.** Route `curve_intent_state`, lookahead shortening
 and FF timing from map geometry (`lookahead_profiler`, distance-to-curve). Then switch preview /
 curve cap / comfort to fallback-only when the map is primary. A/B: lateral RMSE and P95 unchanged
