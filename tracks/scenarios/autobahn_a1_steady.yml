@@ -11,7 +11,9 @@
 # ~0.3 m/s of closing authority so the ACC+NMPC coexistence question is actually testable.
 # Restore 20 m/s with the Stage-2 speed-expansion work (target >= 20 m/s).
 # Tests ACC + NMPC coexistence: NMPC active at 25 m/s; IDM adjusts target speed.
-# Expected: ACC + NMPC active simultaneously; no regime interference; post-convergence gap RMSE vs IDM equilibrium ≤ 10m.
+# Expected: ACC active; post-convergence gap RMSE vs IDM equilibrium ≤ 10m; 0 collisions.
+#   (2026-10-11: the former "ACC + NMPC active simultaneously" clause is untestable at the 11.5 m/s
+#    lead / 12 m/s target — the run is LMPC 98-99 % of frames; it returns with Stage-2 speed expansion.)
 #   (was "gap RMSE ≤ 0.5m" until 2026-09-26 — see T-ACC-RMSE-GATE.)
 # base: tracks/autobahn_30.yml
 

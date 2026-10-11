@@ -47,6 +47,21 @@ regression" that vanished entirely at a 0.05 m/s² dead-band:
 
 Proposed `db = 0.10 m/s²`. Scoring change — needs baseline re-freeze.
 
+### T-SPEED-OWNER-CONSOLIDATION — one owner for the longitudinal command (2026-10-11, DESIGN NOTE)
+
+`docs/plans/speed-owner-consolidation-plan.md`. Five owners (target+map limit, comfort governor,
+velocity profile, preview/curve-cap/backstop, planner, IDM→two accel paths) carry five lateral-accel
+budgets (0.05 / 0.08 / 0.26 / 0.31 g + 0.15 g regime) and four a_lon sets. The binding one on the slow
+tracks is the profile's `a_lat_tracking_budget_g = 0.05` — a controller-capability proxy that encodes
+PP's weakness as a speed policy (R40 → 4.4 m/s, R100 → 7.0 m/s = s_loop 4.1 / hill 6.2 medians).
+April's attempt to drop preview/curve-cap failed (97 → 79, OOL) because they also drive
+curve-intent / lookahead / FF timing into the lateral loop — the decoupling is the architecture step.
+Phases P1 one lateral budget → P2 map-sourced lateral signals, owners to fallback → P3 one (v, a)
+arbiter + symmetric IDM routing (harness re-fit first) → P4 dead-config purge. Acceptance table in §6
+(SpeedCompliance hill ≥ 85, s_loop ≥ 70, OOL/e-stop 0, launch ≤ 8 s, G1 bias ≤ +3, G2 TTC ≥ 2.4).
+Also 2026-10-11: A1/A2 `Expected:` lines rewritten to what the scenarios can test at a 12 m/s target
+(NMPC/regime-transition clauses deferred to Stage-2 speed expansion).
+
 ### T-METRIC-ACC-COMPOSITE-2026-10 — scorer work-package step 1 (2026-10-10, DONE; one item open)
 
 Motivation: Night-59 scored the first 14/14 ACC PASS 5–15 pts *lower* than the overlay stack it
