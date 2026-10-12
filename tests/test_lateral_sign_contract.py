@@ -299,7 +299,11 @@ class TestLMPCMirrorSymmetry:
 
     def test_steady_state_is_symmetric(self):
         a, b = _wrapper_sequence(+1.0), _wrapper_sequence(-1.0)
-        assert float(np.max(np.abs(a[30:] + b[30:]))) < 1e-6
+        # Tolerance 1e-5, not 1e-6: OSQP is an iterative solver and its last-digit result shifts with the
+        # BLAS backend and under xdist worker subprocesses (feedback_mpc_tests_xdist_flaky, feedback_solver_
+        # cold_start_determinism). Serial runs sit ~1e-9; a 2026-10-12 full-suite xdist run measured 3.1e-6.
+        # 1e-5 still catches a real sign/gain asymmetry (those are O(1e-1)) without flagging solver jitter.
+        assert float(np.max(np.abs(a[30:] + b[30:]))) < 1e-5
 
     @pytest.mark.xfail(strict=True, reason=(
         "kappa_transition_warmup fires on `kappa_ref - last > threshold` (mpc_controller.py:1768), a SIGNED increase, "
@@ -402,8 +406,16 @@ class TestClosedLoopUnityFrame:
         on_arc = r['regime'] == int(ControlRegime.PURE_PURSUIT)
         assert on_arc.any(), f"regime never left LINEAR_MPC: {np.unique(r['regime'])}"
         u_pp = r['u'][on_arc]
-        assert np.all(np.sign(u_pp[np.abs(u_pp) > 1e-3]) == -direction), \
-            "regime-0 lateral path must steer INTO the arc (left arc → negative command)"
+        # Assert the net reaction, not every frame. A per-frame `np.all(sign == ...)` over a >1e-3 deadband is
+        # brittle: one near-zero command whose last digit flips under an xdist worker (the OSQP determinism
+        # class) failed this as a REAL_BREAK on 2026-10-12 though it passed every serial re-run. The physical
+        # claim is "the regime-0 path steers INTO the arc" — so check the mean command is clearly signed the
+        # right way and that no CLEARLY-large command (>5e-3) points the wrong way.
+        assert np.sign(np.mean(u_pp)) == -direction and abs(np.mean(u_pp)) > 5e-3, \
+            f"regime-0 path must steer into the arc: mean command {np.mean(u_pp):+.4f}, expected sign {-direction:+.0f}"
+        wrong = u_pp[np.sign(u_pp) == direction]
+        assert not np.any(np.abs(wrong) > 5e-3), \
+            f"a clearly-large command pointed OUT of the arc: {wrong[np.abs(wrong) > 5e-3]}"
 
 
 # ===========================================================================

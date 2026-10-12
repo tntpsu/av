@@ -6,6 +6,21 @@
 
 ## Queued — pick up next
 
+### T-ACC-H8-OVERLAY-DROP — the nightly re-seed launched ACC scenarios without their overlay (2026-10-12, FIXED)
+
+Night-61 H8 scored 80.9 (FAIL), reproduced twice, and looked like curvature-sign fallout. It was not: the fresh
+`/e2e` re-seed launched H8 and G1 with **no `--config` overlay** (recording snapshot: no overlay path,
+`trajectory.target_speed 12.0`), because `.claude/docs/scenario_registry.md` — the file `/e2e` resolves the overlay
+from — was missing. At the base 12 m/s target the ego cannot close on H8's lead (starts beyond the 150 m radar
+range), ACC never engages, and the composite collapses on the convergence terms. G1 passed only because grade
+following needs no closing speed. Fix: created the registry (alias table + per-scenario track-yaml / overlay /
+duration). Applying `config/acc_highway.yaml` is sufficient — orchestrator `_sync_target_speed()` propagates
+`trajectory.target_speed 15` to the longitudinal controller at init. Confirmed: H8 with the overlay reaches 14.7 m/s,
+engages at 33 s, overall 98.6 (recording_20261012_142449). Tonight's nightly is the end-to-end confirmation.
+Follow-up watch: `/e2e` still carries an "omit `--config` on the hill track" rule (e2e.md) — it must NOT fire for the
+hill ACC scenarios g1/g2, whose registry overlay is `config/acc_hill_highway.yaml`.
+
+
 ### T-METRIC-MSDV-WIRE — gate on ride comfort, not just amplitude (2026-08-15)
 
 `tools/analyze/analyze_ride_comfort.py` computes MSDV / `a_w` RMS / dominant
