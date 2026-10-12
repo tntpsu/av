@@ -50,23 +50,40 @@ def run(params, v, tau=0.25, delay_frames=2, smith_cap=0.08, Ld=6.3, kappa=0.0, 
     R=X(rs[sl]); U=X(us[sl]); D=X(ds[sl]); G=np.abs(U*np.conj(R))/np.abs(R*np.conj(R)); Pd=np.abs(D*np.conj(R))/np.abs(U*np.conj(R)+R*np.conj(R))
     return dict(G=G, Pd=Pd, tones=tones, d_rms=float(np.sqrt(np.mean(ds[sl]**2))), diverged=len(ds)<int(T/FRAME_DT))
 def variant(**kw): return dataclasses.replace(base, **kw)
+def gv(ratio):  # scale the modelled command->angle authority to a fraction of the map
+    return dict(max_steer_low_speed_rad=0.5236*ratio, max_steer_high_speed_rad=0.2793*ratio)
 V={'production': base,
    'actuator model tau=0.25': variant(actuator_model_enabled=True, actuator_tau_s=0.25),
-   'actuator model tau=0.25 + steer gain 0.8': variant(actuator_model_enabled=True, actuator_tau_s=0.25, max_steer_low_speed_rad=0.5236*0.8, max_steer_high_speed_rad=0.2793*0.8),
-   'steer gain 0.8 only (model authority = measured)': variant(max_steer_low_speed_rad=0.5236*0.8, max_steer_high_speed_rad=0.2793*0.8),
+   'actuator model tau=0.25 + gain 0.8': variant(actuator_model_enabled=True, actuator_tau_s=0.25, **gv(0.8)),
+   'steer gain 0.8 only': variant(**gv(0.8)),
    'r_steer_rate x2': variant(r_steer_rate=base.r_steer_rate*2),
-   'r_steer_rate sched onset 8': variant(r_steer_rate_scheduling_enabled=True, r_steer_rate_speed_onset=8.0),
+   'r_steer_rate x4': variant(r_steer_rate=base.r_steer_rate*4),
+   'q_lat x0.5 (lower loop gain)': variant(q_lat=base.q_lat*0.5),
+   'q_lat x0.5 + r_steer_rate x2': variant(q_lat=base.q_lat*0.5, r_steer_rate=base.r_steer_rate*2),
+   'actuator tau=0.25 + q_lat x0.7': variant(actuator_model_enabled=True, actuator_tau_s=0.25, q_lat=base.q_lat*0.7),
 }
+# Smith full-delay compensation is a run() arg (smith_cap), swept separately below.
 import itertools
 RATE=[0.15, 0.06, 0.044]
 print("measured sensitivity peaks (|G_ur| max @0.4-0.5 Hz): 7.6: 5-9x  9.7: 4.5-16x  11.6: 6-7x  13.5: 67x | measured |P_d| mid-band: 9.7 0.60, 11.6 0.86, 13.5 0.87 m/unit")
+def peak(o):
+    k=int(np.argmax(o['G'])); return o['G'][k], o['tones'][k]
 for rl in RATE:
-  print(f"\n### stack per-frame rate limit {rl}")
-  for name,p in list(V.items())[:3]:
+  print(f"\n### stack per-frame rate limit {rl}  (lower sens @0.4-0.5 Hz = more margin)")
+  for name,p in V.items():
     row=[]
-    for v in (7.6, 9.7, 11.6, 13.5):
+    for v in (9.7, 11.6, 13.5):
         o=run(p,v,rate_lim=rl)
         if o is None: row.append(f"v{v:4.1f}: DIVERGED"); continue
-        k=int(np.argmax(o['G'])); mb=(o['tones']>=0.33)&(o['tones']<=0.58)
-        row.append(f"v{v:4.1f}: sens {o['G'][k]:5.1f}x@{o['tones'][k]:.2f} |P_d|mid {np.median(o['Pd'][mb]):.2f} d_rms {o['d_rms']:.2f}{' DIV' if o['diverged'] else ''}")
-    print(f"    {name:40s} | "+' | '.join(row))
+        g,fk=peak(o)
+        row.append(f"v{v:4.1f} sens {g:5.1f}x@{fk:.2f} drms {o['d_rms']:.2f}{' DIV' if o['diverged'] else ''}")
+    print(f"    {name:34s} | "+' | '.join(row))
+
+print("\n### Smith predictor cap sweep (production params, rate limit 0.06) — full 100 ms compensation = 0.10")
+for cap in (0.08, 0.10, 0.12):
+    row=[]
+    for v in (9.7, 11.6, 13.5):
+        o=run(base, v, rate_lim=0.06, smith_cap=cap)
+        if o is None: row.append(f"v{v:4.1f}: DIVERGED"); continue
+        g,fk=peak(o); row.append(f"v{v:4.1f} sens {g:5.1f}x drms {o['d_rms']:.2f}")
+    print(f"    smith_cap {cap:.2f} | "+' | '.join(row))
