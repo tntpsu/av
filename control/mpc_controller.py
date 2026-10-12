@@ -234,6 +234,15 @@ class MPCParams:
     # the kinematic feedforward points out of every arc at 1.0 (tests/test_lateral_sign_contract.py). −1.0 hands
     # the solver its own convention. 1.0 = legacy behaviour until a Unity A/B that flips BOTH writers certifies it.
     curvature_sign: float = 1.0
+    # Speed gate for the actuator-augmented model (T-LATERAL-LMPC-SPEED-MARGIN, 2026-10-12). The actuator-lag
+    # model fixes the high-speed loop margin (the 0.4–0.5 Hz mode crosses unity gain between 9.8 and 11.6 m/s)
+    # but adds a curvature-scaled steady offset that is structural to its feedforward (not tunable via
+    # actuator_q_lat or τ). That offset only costs the tight LOW-speed curves (hill R100 at 6.6 m/s), where there
+    # is no margin problem. 0.0 = ungated (actuator applies at all speeds, legacy); > 0 = the controller holds
+    # TWO solvers and runs the actuator-augmented one only above this speed, the kinematic one below, with
+    # `actuator_speed_gate_hysteresis_mps` around the threshold. Inert when actuator_model_enabled is false.
+    actuator_speed_gate_mps: float = 0.0
+    actuator_speed_gate_hysteresis_mps: float = 0.5
     # Lateral weight that belongs to the actuator-augmented model. The production q_lat (1.0) was tuned
     # for the kinematic model; with the lag state in the QP the same weight delivers only ~56 % of the
     # kinematic correction at recorded states (replay over 160 frames, 2026-10-11) and parks at twice
@@ -1462,7 +1471,18 @@ class MPCController:
 
     def __init__(self, config: dict):
         self.params = MPCParams.from_config(config)
-        self.solver = MPCSolver(self.params)
+        # Speed-gated actuator model: build a kinematic and an actuator-augmented solver and dispatch by speed
+        # (compute_steering). 0.0 gate or actuator off → one solver, as before.
+        self._actuator_gated = bool(
+            self.params.actuator_model_enabled and self.params.actuator_speed_gate_mps > 0.0
+        )
+        if self._actuator_gated:
+            self._solver_actuator = MPCSolver(self.params)
+            self._solver_kinematic = MPCSolver(_dc_replace(self.params, actuator_model_enabled=False))
+            self._actuator_active = False            # hysteresis state; start below the gate
+            self.solver = self._solver_kinematic
+        else:
+            self.solver = MPCSolver(self.params)
         self._consecutive_failures = 0
         self._fallback_active = False
         self._fallback_frames = 0       # frames spent in fallback — for recovery
@@ -1542,6 +1562,16 @@ class MPCController:
             kappa_ref = float(kappa_ref) * self.params.curvature_sign
             if kappa_horizon is not None:
                 kappa_horizon = np.asarray(kappa_horizon, dtype=float) * self.params.curvature_sign
+        # Speed-gated actuator model: pick the actuator-augmented solver above the gate, kinematic below,
+        # with hysteresis so a car hovering at the threshold does not switch QP structure every frame.
+        if self._actuator_gated:
+            gate = self.params.actuator_speed_gate_mps
+            hys = self.params.actuator_speed_gate_hysteresis_mps
+            if not self._actuator_active and current_speed >= gate + hys:
+                self._actuator_active = True
+            elif self._actuator_active and current_speed <= gate - hys:
+                self._actuator_active = False
+            self.solver = self._solver_actuator if self._actuator_active else self._solver_kinematic
         if abs(e_heading) > 0.3:
             logger.warning(
                 "MPC: heading error %.3f rad exceeds small-angle limit (0.3 rad)",
@@ -1952,6 +1982,12 @@ class MPCController:
         """Reset solver state (e.g., on regime switch or after e-stop)."""
         self.solver._warm_x = None
         self.solver._warm_y = None
+        if self._actuator_gated:
+            # Clear both solvers' warm starts and start below the gate.
+            self._solver_actuator._warm_x = self._solver_actuator._warm_y = None
+            self._solver_kinematic._warm_x = self._solver_kinematic._warm_y = None
+            self._actuator_active = False
+            self.solver = self._solver_kinematic
         self._consecutive_failures = 0
         self._fallback_active = False
         self._fallback_frames = 0

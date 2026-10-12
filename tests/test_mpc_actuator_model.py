@@ -259,6 +259,83 @@ class TestConfigLoading:
         p = MPCParams.from_config(cfg)
         assert p.actuator_model_enabled is False
 
+    def test_from_config_loads_speed_gate(self):
+        p = MPCParams.from_config({'trajectory': {'mpc': {
+            'mpc_actuator_speed_gate_mps': 9.0, 'mpc_actuator_speed_gate_hysteresis_mps': 0.4}}})
+        assert p.actuator_speed_gate_mps == 9.0 and p.actuator_speed_gate_hysteresis_mps == 0.4
+
+    def test_speed_gate_defaults_to_ungated(self):
+        p = MPCParams.from_config({'trajectory': {'mpc': {}}})
+        assert p.actuator_speed_gate_mps == 0.0
+
+
+# ─────────────────── Speed-gated actuator model (T-LATERAL-LMPC-SPEED-MARGIN, 2026-10-12) ───────────────────
+
+class TestActuatorSpeedGate:
+    """The actuator-lag model fixes the high-speed loop margin but adds a curvature-scaled steady offset that
+    only costs the tight LOW-speed curves. The gate runs the actuator-augmented solver above a speed and the
+    kinematic one below, so the fix lands where the margin problem is (≥ ~9.8 m/s) and the offset never touches
+    hill's 6.6 m/s curves. Below = bit-exact kinematic; above = bit-exact ungated actuator."""
+
+    from control.mpc_controller import MPCController  # noqa: E402
+
+    @staticmethod
+    def _ctrl(**mpc):
+        from control.mpc_controller import MPCController
+        base = {'mpc_curvature_sign': -1.0, 'mpc_actuator_model_enabled': True, 'mpc_actuator_tau_s': 0.25}
+        base.update(mpc)
+        return MPCController({'trajectory': {'mpc': base}})
+
+    @staticmethod
+    def _settle(ctrl, v, kappa=0.005):
+        u = 0.0; r = None
+        for _ in range(8):
+            r = ctrl.compute_steering(e_lat=0.2, e_heading=0.01, current_speed=v, last_delta_norm=u,
+                                      kappa_ref=kappa, v_target=12.0, v_max=15.0, dt=0.05,
+                                      delta_actual_norm=u, kappa_horizon=np.full(20, kappa))
+            u = float(r['steering_normalized'])
+        return u
+
+    def test_gate_zero_builds_one_solver_and_is_not_gated(self):
+        c = self._ctrl(mpc_actuator_speed_gate_mps=0.0)
+        assert c._actuator_gated is False and not hasattr(c, '_solver_kinematic')
+
+    def test_gate_off_when_actuator_disabled(self):
+        from control.mpc_controller import MPCController
+        c = MPCController({'trajectory': {'mpc': {'mpc_actuator_model_enabled': False,
+                                                  'mpc_actuator_speed_gate_mps': 9.0}}})
+        assert c._actuator_gated is False
+
+    def test_below_gate_matches_kinematic_bit_exact(self):
+        gated = self._settle(self._ctrl(mpc_actuator_speed_gate_mps=9.0), 6.6)
+        kin = self._settle(self._ctrl(mpc_actuator_model_enabled=False), 6.6)
+        assert gated == pytest.approx(kin, abs=1e-9)
+
+    def test_above_gate_matches_ungated_actuator_bit_exact(self):
+        for v in (9.8, 11.6):
+            gated = self._settle(self._ctrl(mpc_actuator_speed_gate_mps=9.0), v)
+            ungated = self._settle(self._ctrl(mpc_actuator_speed_gate_mps=0.0), v)
+            assert gated == pytest.approx(ungated, abs=1e-9), f"v={v}"
+
+    def test_hysteresis_holds_across_the_threshold(self):
+        c = self._ctrl(mpc_actuator_speed_gate_mps=9.0, mpc_actuator_speed_gate_hysteresis_mps=0.5)
+        # Rising: stays kinematic until gate+hys, then latches actuator.
+        self._settle_one(c, 9.2); assert c._actuator_active is False     # 9.2 < 9.5
+        self._settle_one(c, 9.6); assert c._actuator_active is True      # 9.6 ≥ 9.5
+        self._settle_one(c, 9.2); assert c._actuator_active is True      # 9.2 > 8.5 → held
+        self._settle_one(c, 8.4); assert c._actuator_active is False     # 8.4 ≤ 8.5 → drops
+
+    @staticmethod
+    def _settle_one(ctrl, v):
+        ctrl.compute_steering(e_lat=0.1, e_heading=0.0, current_speed=v, last_delta_norm=0.0,
+                              kappa_ref=0.003, v_target=12.0, v_max=15.0, dt=0.05,
+                              delta_actual_norm=0.0, kappa_horizon=np.full(20, 0.003))
+
+    def test_reset_returns_to_below_gate_state(self):
+        c = self._ctrl(mpc_actuator_speed_gate_mps=9.0)
+        self._settle_one(c, 11.6); assert c._actuator_active is True
+        c.reset(); assert c._actuator_active is False and c.solver is c._solver_kinematic
+
 
 # ─────────────────── Gain-consistent actuator state (2026-10-11) ───────────────────
 
