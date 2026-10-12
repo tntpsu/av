@@ -930,5 +930,27 @@
     "superseded_by": null,
     "resolved_by": "pending commit",
     "next": "Night-61 confirmation on 6 tracks + 14 ACC scenarios (ACC highway/hill scenarios run the LMPC too). Then: fix kappa_transition_warmup (|d kappa|), add the inter-frame writer + rate limiter + Smith predictor to the harness and calibrate on the 0.42 Hz growth, then design the margin fix (loop gain at 0.4-0.5 Hz above 10 m/s) before resuming P1."
+  },
+  {
+    "date": "2026-10-12",
+    "target_metric": "LMPC speed margin at 11.6 (OOL/RMSE) vs steady curve offset (at-car), on the corrected sign -1",
+    "target_track": "mixed_radius R200 @11.6 budget-on (margin); hill_highway R100 @6.6 + highway_65 R500 @12 (offset)",
+    "approach": "Unity A/B mpc_actuator_model_enabled off vs on (tau 0.25) on top of the promoted mpc_curvature_sign -1, 5 pairs/track. The 2026-10-11 actuator A/B had been confounded by the wrong-way FF (sign +1); this is the clean test. Oracle (straight-line sensitivity) ranked the actuator model as the decisive, only-stable margin fix beforehand.",
+    "fix_level": "ARCHITECTURE (controller model) \u2014 margin fix confirmed, promotion BLOCKED by a curvature-scaled offset",
+    "hypothesis": "With the FF now pointing the right way, the actuator model fixes the margin AND the October steady offset is gone.",
+    "outcome": "MIXED",
+    "outcome_status": "OPEN",
+    "metric_before": 68.0,
+    "metric_after": 86.6,
+    "root_cause_of_failure": "actuator_ff_structural_offset",
+    "root_cause_detail": "Margin FIXED: mixed R200@11.6 OOL 3/5->1/4, at-car RMSE 0.40->0.17, P95 1.15->0.39, overall 68->86.6 (oracle predicted 2.5x sensitivity cut). Highway R500 NEUTRAL/slightly better: offset +0.047->+0.034, Traj 99.1->98.9, overall 99.8->99.6. Hill R100 REGRESSES: steady offset -0.06->-0.14 (inside), RMSE 0.055->0.108, Traj 97.2->94.6 (below 95), overall 94.6->93.8. The offset is curvature-scaled (negligible at R500 kappa 0.002, +0.08 m at R100 kappa 0.010) and structural to the actuator-augmented feedforward: harness shows it INSENSITIVE to actuator_q_lat (0->4: hill -0.27 flat) and only partly reduced by tau->0 (hill -0.27 at 0.25 -> -0.235 at 0.02, not back to kinematic -0.08). So neither companion knob fixes it. The margin is a HIGH-SPEED phenomenon (sensitivity peak crosses unity 9.8->11.6); hill curves are 6.6 m/s with no margin problem, so the fix should be SPEED-GATED (active only >~9 m/s), which avoids the hill offset entirely. The QP structure (augmented state) is fixed at build, so a speed gate needs a QP rebuild on threshold crossing (like the regime selector) or a targeted FF-path correction.",
+    "iterations_spent": 2,
+    "files_changed": [
+      "tools/analyze/lmpc_closed_loop_oracle.py (candidate set)",
+      "(no production change \u2014 kill-switch stays off)"
+    ],
+    "superseded_by": null,
+    "resolved_by": null,
+    "next": "Decision: (A) promote as-is \u2014 hill is ALREADY a FAIL (SpeedCompliance 43.8) so no gate-status change, and fixing lane departures at speed dominates a 0.05 m hill offset; or (C, recommended) speed-gate the actuator model (active >~9 m/s) so hill (6.6) never sees it \u2014 matches the fix to its high-speed mechanism, needs a QP rebuild on the speed threshold with hysteresis. (B) fix the actuator FF offset in the decomposition/alignment path \u2014 deepest, uncertain. Then one Unity A/B and the six-track regression."
   }
 ]
