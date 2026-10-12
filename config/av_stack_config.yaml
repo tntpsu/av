@@ -946,8 +946,11 @@ trajectory:
     # mpc-reference.md §Phase B-NEW and project_h2_damping_on_straights.md.
     mpc_ff_decomposition_enabled: true
     # Steering actuator model
+    mpc_curvature_sign: 1.0                # 1.0 = orchestrator sign (+left) passed through; -1.0 hands the LMPC heading row its own convention. Applied inside MPCController so the camera-frame AND inter-frame paths agree (2026-10-11 A/B flipped only one of them — invalid; see tests/test_lateral_sign_contract.py)
     mpc_actuator_model_enabled: false
     mpc_actuator_tau_s: 0.25
+    mpc_actuator_gain_ratio: 0.78          # identified 2026-10-11: actuator settles at 0.65-0.85 of cmd*max_steer (inert while the model is off)
+    mpc_actuator_q_lat: 0.0                # 0 = use q_lat; 4.0 restored the kinematic static response in replay but left the lane on the R200 reproducer (2026-10-11)
     mpc_actuator_rate_limit_deg_per_s: 90.0
     mpc_q_actuator: 0.0
     mpc_delta_rate_max: 0.15        # max Δδ_norm per step
@@ -997,6 +1000,10 @@ trajectory:
     # on its own. Leaving bias_enabled=True would fight the direct feedback
     # by slowly reducing kappa when e_lat persists, creating a new equilibrium.
     mpc_bias_enabled: false
+    mpc_bias_alpha: 0.005
+    mpc_bias_kappa_gain: 0.015
+    mpc_bias_max_correction: 0.002
+    mpc_bias_min_speed: 5.0
     mpc_bias_relative_guard_min_kappa: 0.0005  # lowered from 0.001: ACC highway κ≈0.0009 must trigger guard
     mpc_bias_ema_abs_max: 0.5                  # absolute clamp on bias EMA accumulator (meters)
     mpc_max_steering_rate_per_frame: 0.15  # safety net rate limiter (rad/frame) — much looser than PP

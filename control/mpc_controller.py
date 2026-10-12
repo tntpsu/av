@@ -220,6 +220,26 @@ class MPCParams:
     # Measured from Unity telemetry: τ≈0.70s, rate≈5.5°/s.
     actuator_model_enabled: bool = False
     actuator_tau_s: float = 0.70               # first-order time constant (seconds)
+    # Steady-state gain of the actuator: the real steer angle settles at gain·(cmd·max_steer), not at
+    # cmd·max_steer. Identified 2026-10-11 by steering injection at 0.65–0.85 (sysid 2026-04: 0.78).
+    # With 1.0 (legacy) the lag model believes the angle is still rising toward the command, corrects
+    # the resulting under-steer more slowly than the kinematic model and doubles the curve offset
+    # (highway R500 arc mean +0.10 → +0.22 m, 2026-10-11 six-track A/B). Applied to the δ_actual
+    # dynamics and to the feedforward alignment; the Unity angle feedback is already normalised by the
+    # model max steer, so it reads gain·cmd in steady state and is consistent with this state.
+    actuator_gain_ratio: float = 1.0
+    # Sign applied to every curvature this controller receives (kappa_ref and kappa_horizon), in ONE place so
+    # the camera-frame dispatch and the inter-frame extrapolation agree. The orchestrator signs curvature
+    # +left/−right; the heading row e_heading += steer_gain·δ − κ·v·dt makes +κ demand +δ (a right turn), so
+    # the kinematic feedforward points out of every arc at 1.0 (tests/test_lateral_sign_contract.py). −1.0 hands
+    # the solver its own convention. 1.0 = legacy behaviour until a Unity A/B that flips BOTH writers certifies it.
+    curvature_sign: float = 1.0
+    # Lateral weight that belongs to the actuator-augmented model. The production q_lat (1.0) was tuned
+    # for the kinematic model; with the lag state in the QP the same weight delivers only ~56 % of the
+    # kinematic correction at recorded states (replay over 160 frames, 2026-10-11) and parks at twice
+    # the curve offset. q_lat 4.0 restores the kinematic static response (slope 1.01) while the lag
+    # model keeps the stability margin. None = use q_lat unchanged.
+    actuator_q_lat: float = 0.0   # 0 = use q_lat unchanged (from_config casts with type(default); None would break it)
     actuator_rate_limit_deg_per_s: float = 90.0  # max actuator rate (°/s) — matches Unity steeringRateLimitDegPerSec
     q_actuator: float = 0.0                    # state cost on δ_actual (0 = no penalty on position itself)
 
@@ -315,6 +335,10 @@ class MPCSolver:
     """
 
     def __init__(self, params: MPCParams):
+        if params.actuator_model_enabled and float(getattr(params, "actuator_q_lat", 0.0) or 0.0) > 0.0:
+            # The actuator-augmented model carries its own lateral weight (see MPCParams.actuator_q_lat).
+            import dataclasses as _dc
+            params = _dc.replace(params, q_lat=float(params.actuator_q_lat))
         self.p = params
         self._N = params.horizon
         if params.dynamic_model_enabled:
@@ -1011,6 +1035,11 @@ class MPCSolver:
                 self._feedforward_delta_norm(kappa[k], self._ff_wheelbase_m, _ms_ff)
                 for k in range(N)
             ], dtype=float)
+            if self.p.actuator_model_enabled and not _dyn and float(self.p.actuator_gain_ratio) > 0.0:
+                # Gain-consistent actuator model: the command that holds κ is δ_ff / g (the actuator
+                # settles at g·cmd). Without this the P-feedback must supply the missing (1−g) of the
+                # curve steer and parks at a steady lateral offset (highway R500: +0.22 m, 2026-10-11).
+                _delta_ff = _delta_ff / float(self.p.actuator_gain_ratio)
 
         # --- Update dynamics in A matrix and c vector ---
         # For each step k, linearize around operating point.
@@ -1117,9 +1146,9 @@ class MPCSolver:
                 # Row 2: v[k+1] = v + a·dt
                 A_data[_ai[(dyn_row + 2, u_col + 1)]] = dt
 
-                # Row 3: δ_actual[k+1] = (1-α)·δ_actual + α·δ_cmd
+                # Row 3: δ_actual[k+1] = (1-α)·δ_actual + α·g·δ_cmd  (g = actuator_gain_ratio)
                 A_data[_ai[(dyn_row + 3, x_col + 3)]] = 1.0 - _act_alpha  # self-decay
-                A_data[_ai[(dyn_row + 3, u_col + 0)]] = _act_alpha         # command input
+                A_data[_ai[(dyn_row + 3, u_col + 0)]] = _act_alpha * float(self.p.actuator_gain_ratio)  # command input
 
                 # -I for x[k+1]
                 for s in range(nx):
@@ -1283,6 +1312,9 @@ class MPCSolver:
                     self._feedforward_delta_norm(kappa[k], self._ff_wheelbase_m, _ms_ff)
                     for k in range(N)
                 ], dtype=float)
+            if _act and float(self.p.actuator_gain_ratio) > 0.0:
+                # The command that holds curvature κ is δ_ff / g when the actuator settles at g·cmd.
+                delta_ff = delta_ff / float(self.p.actuator_gain_ratio)
 
             r_sr = self._current_r_steer_rate
             for k in range(N - 1):
@@ -1506,6 +1538,10 @@ class MPCController:
                        mpc_fallback_active, mpc_consecutive_failures,
                        e_lat_input, e_heading_input, kappa_ref_used
         """
+        if self.params.curvature_sign != 1.0:
+            kappa_ref = float(kappa_ref) * self.params.curvature_sign
+            if kappa_horizon is not None:
+                kappa_horizon = np.asarray(kappa_horizon, dtype=float) * self.params.curvature_sign
         if abs(e_heading) > 0.3:
             logger.warning(
                 "MPC: heading error %.3f rad exceeds small-angle limit (0.3 rad)",

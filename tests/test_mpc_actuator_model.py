@@ -258,3 +258,75 @@ class TestConfigLoading:
         cfg = {'trajectory': {'mpc': {}}}
         p = MPCParams.from_config(cfg)
         assert p.actuator_model_enabled is False
+
+
+# ─────────────────── Gain-consistent actuator state (2026-10-11) ───────────────────
+
+class TestActuatorGainRatio:
+    """The real actuator settles at gain·cmd·max_steer (identified 0.65–0.85). With the legacy 1.0 the
+    lag model doubles the curve under-steer offset; with the gain in the state and in the feedforward
+    alignment the QP commands δ_ff/g in a steady curve."""
+
+    def test_default_is_legacy_and_qp_identical(self):
+        p1 = _make_params(actuator_tau_s=0.25)
+        p2 = _make_params(actuator_tau_s=0.25, actuator_gain_ratio=1.0)
+        r1 = _solve(MPCSolver(p1), e_lat=0.3, kappa_ref_horizon=np.full(20, 0.005))
+        r2 = _solve(MPCSolver(p2), e_lat=0.3, kappa_ref_horizon=np.full(20, 0.005))
+        assert r1["steering_normalized"] == pytest.approx(r2["steering_normalized"], abs=1e-9)
+
+    def test_actuator_state_settles_at_gain_times_command(self):
+        """Predicted δ_actual at the end of the horizon tracks g·δ_cmd, not δ_cmd."""
+        for g in (1.0, 0.78):
+            p = _make_params(actuator_tau_s=0.25, actuator_gain_ratio=g, q_lat=0.0, q_heading=0.0, r_steer=1e-4)
+            s = MPCSolver(p)
+            r = _solve(s, kappa_ref_horizon=np.full(20, 0.004), delta_actual_norm=0.0)
+            traj = np.asarray(r["predicted_trajectory"])
+            d_act_end = traj[-1, 3]
+            # the steering sequence settles; compare the last state with g times the last command
+            u_last = float(r.get("steering_sequence", [r["steering_normalized"]])[-1]) if r.get("steering_sequence") is not None else r["steering_normalized"]
+            assert abs(d_act_end) > 1e-4
+            # ratio of settled state to the command is g within the lag horizon tolerance
+            assert d_act_end / u_last == pytest.approx(g, rel=0.25)
+
+    def test_gain_consistent_model_commands_more_steer_in_a_curve(self):
+        """Same curve, same state: with g=0.78 the QP asks for ≈1/0.78 of the g=1.0 command."""
+        base = MPCSolver(_make_params(actuator_tau_s=0.25, actuator_gain_ratio=1.0))
+        gc = MPCSolver(_make_params(actuator_tau_s=0.25, actuator_gain_ratio=0.78))
+        kw = dict(e_lat=0.0, e_heading=0.0, v=11.6, kappa_ref_horizon=np.full(20, 0.002), delta_actual_norm=None)
+        u1 = _solve(base, **kw)["steering_normalized"]; u2 = _solve(gc, **kw)["steering_normalized"]
+        assert abs(u1) > 1e-3
+        assert u2 / u1 == pytest.approx(1 / 0.78, rel=0.2)
+
+    def test_from_config_loads_gain_ratio(self):
+        p = MPCParams.from_config({"trajectory": {"mpc": {"mpc_actuator_gain_ratio": 0.78}}})
+        assert p.actuator_gain_ratio == 0.78
+
+    def test_gain_applies_in_the_feedforward_decomposition_path_too(self):
+        """Production runs ff_decomposition (base config true): the curve command must still be δ_ff/g."""
+        kw = dict(e_lat=0.0, e_heading=0.0, v=11.6, kappa_ref_horizon=np.full(20, 0.002), delta_actual_norm=None)
+        base = MPCSolver(_make_params(actuator_tau_s=0.25, actuator_gain_ratio=1.0, ff_decomposition_enabled=True, ff_alignment_enabled=True))
+        gc = MPCSolver(_make_params(actuator_tau_s=0.25, actuator_gain_ratio=0.78, ff_decomposition_enabled=True, ff_alignment_enabled=True))
+        u1 = _solve(base, **kw)["steering_normalized"]; u2 = _solve(gc, **kw)["steering_normalized"]
+        assert abs(u1) > 1e-3
+        assert u2 / u1 == pytest.approx(1 / 0.78, rel=0.2)
+
+    def test_actuator_q_lat_only_applies_with_the_model(self):
+        p_off = _make_params(actuator_model_enabled=False, q_lat=1.0, actuator_q_lat=4.0)
+        p_on = _make_params(actuator_model_enabled=True, q_lat=1.0, actuator_q_lat=4.0)
+        assert MPCSolver(p_off).p.q_lat == 1.0
+        assert MPCSolver(p_on).p.q_lat == 4.0
+        assert MPCSolver(_make_params(actuator_model_enabled=True, q_lat=1.0)).p.q_lat == 1.0
+
+    def test_actuator_q_lat_restores_correction_strength(self):
+        """At a lateral error the augmented model with its own weight corrects at least as hard as the
+        kinematic production model, where with the kinematic weight it corrected ~half as hard."""
+        kin = MPCSolver(_make_params(actuator_model_enabled=False, q_lat=1.0, r_steer=0.05, r_steer_rate=2.0, ff_decomposition_enabled=True))
+        weak = MPCSolver(_make_params(actuator_model_enabled=True, actuator_tau_s=0.25, q_lat=1.0, r_steer=0.05, r_steer_rate=2.0, ff_decomposition_enabled=True))
+        strong = MPCSolver(_make_params(actuator_model_enabled=True, actuator_tau_s=0.25, q_lat=1.0, actuator_q_lat=4.0, r_steer=0.05, r_steer_rate=2.0, ff_decomposition_enabled=True))
+        # recorded arc state, highway_65 R500 at 11.6 m/s (recording_20261011_130336 frame 1211):
+        # e_lat +0.28 m, e_heading -0.008 rad, last command -0.022, actual angle +0.55 deg (= -0.034 normalised)
+        kw = dict(e_lat=0.28, e_heading=-0.008, v=11.6, last_delta_norm=-0.022, kappa_ref_horizon=np.full(20, 0.002), delta_actual_norm=-0.034)
+        u_k = _solve(kin, **kw)["steering_normalized"]; u_w = _solve(weak, **kw)["steering_normalized"]; u_s = _solve(strong, **kw)["steering_normalized"]
+        assert u_k < -0.03                                   # kinematic corrects the +0.28 m error
+        assert abs(u_w) < 0.5 * abs(u_k)                     # augmented model with the kinematic weight: under half the correction
+        assert np.sign(u_s) == np.sign(u_k) and abs(u_s) >= 0.8 * abs(u_k)   # with its own weight: restored

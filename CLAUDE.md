@@ -338,6 +338,26 @@ from `vehicle/lead_collision_detected` (the `distance < 0` line is structurally
 0); e-stop events exclude EMERGENCY_BRAKE reflex frames. The harness models both
 frames (`_legacy_cfg`).
 
+## Testing Protocol — Lateral Sign Contract (2026-10-11)
+
+`tests/test_lateral_sign_contract.py` — ~30 tests, ~5 s, no Unity. One kinematic plant in **Unity's measured
+frame** (negative command = left, orchestrator +κ = left, ground-truth fields as the orchestrator fills them,
+conventions pinned from two mirrored recordings) driven through the production `VehicleController.compute_control`
+and `compute_interframe_steering`. A minus sign has been blamed four times (NMPC e_lat, NMPC κ, LMPC e_lat, LMPC κ);
+the older `test_closedloop_stability.py` plant is written in the solver's own convention and cannot see a
+disagreement with the orchestrator.
+
+**Run when you touch:** any lateral dispatch in `control/pid_controller.py`, `MPCController.compute_steering`,
+the orchestrator's `_pf_compute_steering` / `_run_interframe_update`, or any `trajectory.mpc.*` sign/FF key.
+
+**Reading the result:** strict xfails are open defects, not noise — `test_zero_error_feedforward_points_into_the_left_arc`
+(the LMPC FF points out of every arc), `test_arc_entry_is_symmetric` (`kappa_transition_warmup` fires on signed
+increase, left arcs only), `R200_right_13.5` (speed-margin reproducer). `TestInterframePathSharesTheCurvatureSign`
+is the regression test for the 2026-10-11 half-flip A/B: the orchestrator writes steering from TWO paths per camera
+cycle; a switch on a controller input belongs in `MPCParams`, never at one call site. `TestHarnessCalibration` pins
+the plant to Unity's legacy numbers (highway 0.094 m, hill 0.05–0.08 m) — if a future Unity A/B disagrees with the
+harness ranking, diff the plant before touching config.
+
 ## Fragile Areas
 
 - **`av_stack.py` lane gating** — `clamp_lane_center_and_width()`, `apply_lane_ema_gating()`, `blend_lane_pair_with_previous()` are deeply interdependent

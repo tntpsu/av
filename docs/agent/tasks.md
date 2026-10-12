@@ -190,6 +190,48 @@ production `pid_controller` LMPC path (the oracle bypasses it, which is where th
 both reproducers — mixed_radius R200 @ 11.6 (margin, OOL guard) and highway_65 R500 @ 11.6 (offset,
 arc-mean error ≤ +0.10); (4) then the six tracks; then P1 step 1.
 
+**2026-10-11 afternoon — the sign, the two writers, and a test that ends the minus-sign re-blames.**
+Dead ends first (all A/B'd, none promoted): gain-consistent actuator FF (`mpc_actuator_gain_ratio` 0.78 — no
+closed-loop effect), `mpc_actuator_q_lat` 4.0 (restores correction strength in replay, OOL on the R200
+reproducer, straights oscillate), bias estimator (saturates at −0.00055, 1/3 OOL on mixed). Then the sign:
+
+- *Measurement.* Two production recordings that are exact mirrors (hill all-left, mixed all-right) pin the
+  conventions: orchestrator +κ = left; Unity command + = right (−0.081 on left arcs); Unity yaw rate − on left
+  arcs with |ω| = κ·v; `groundTruthLaneCenterX*` = lane-centre offset from the car (+ = centre right);
+  `*_road_frame_at_car` = car offset (+ right); `headingDeltaDeg` + = pointing right (corr +0.85 with d/dt
+  at-car cross-track); GT lookahead 6.0 m, lookahead − at-car = −½Ld²κ. The bare solver and the MPCController
+  wrapper are mirror-symmetric to 1e-9 at steady state; the only asymmetry is `kappa_transition_warmup`
+  (fires on a *signed* κ increase → left arcs only, ~5 frames at entry).
+- *Mechanism.* The LMPC heading row `e_heading += steer_gain·δ − κ·v·dt` makes +κ demand +δ, a RIGHT turn, so with
+  the orchestrator's +κ = left the kinematic feedforward points OUT of every arc (zero-error command +0.03–0.045
+  for κ = +0.005 at every speed). The feedback carries the curve; the lookahead reference `−gt_cross_track_lookahead`
+  carries a −½Ld²κ bias (0.18 m at R100) that the wrong-way FF happens to cancel at 6.6 m/s. Highway +0.094 m and
+  the R200 speed-margin loss are the same mechanism at speeds where the feedback can no longer carry it.
+- *The A/B was invalid.* `mpc_curvature_sign: -1` was applied at the camera-frame dispatch in pid_controller.
+  The orchestrator ALSO drives the same MPCController through `compute_interframe_steering` (up to 3× per camera
+  cycle, 57 % of recorded frames, unflipped κ). On hill the two writers alternated opposite-sign commands into
+  Unity every frame (`vehicle/steering_input` −0.105 / +0.06 / −0.105 …) while the camera-frame command froze at
+  −0.105 and the car parked 0.4–0.9 m outside. mixed 2/2 → 0/3 OOL and highway +0.094 → +0.071 were measured under
+  the same half-flip. None of the three arms certifies or refutes the flip. Fix: the sign now lives in
+  `MPCParams.curvature_sign` (applied inside `compute_steering`, default 1.0 = legacy); the pid_controller block
+  is removed.
+- *Test.* `tests/test_lateral_sign_contract.py` (30 tests, 5 s): Unity-frame kinematic plant (gain 0.8·max_steer
+  map, τ 0.25, 2-frame delay, L_eff(v)) driven through the production `VehicleController`. Calibrated: highway
+  legacy 0.107 m vs Unity 0.094; hill 0.033 vs 0.05–0.08 (command −0.096 vs −0.081). Strict xfails = open defects:
+  FF direction, warm-up asymmetry, R200 @ 13.5 (0.31 m steady). `TestInterframePathSharesTheCurvatureSign` is the
+  regression test for the half-flip. Harness gotcha: `longitudinal_controller.max_speed` must be set to the track
+  limit (default 10.0 made every solve above 10 m/s "infeasible" → fallback; Unity solves 100 %).
+- *Harness prediction for a VALID A/B (both writers flipped):* car moves inward on every arc; |offset| shrinks from
+  9.8 m/s up (R200 @ 11.6 0.19 → 0.07, R500 @ 12 0.107 → 0.048, R100 @ 9.8 0.25 → 0.05) but overshoots inside at
+  6.6 m/s (0.033 out → 0.082 in) — the reference bias must be fixed in the same step.
+
+**Next (item 3, revised):** (1) valid Unity A/B of `mpc_curvature_sign: -1` (shared sign), 5 pairs on hill R100,
+mixed R200 with the 0.08 g budget, highway — accept only if Unity matches the harness prediction above (if it
+does not, diff the plant, do not tune); (2) remove the lookahead-reference bias (at-car reference or a
+curvature-corrected lookahead, `mpc_e_lat_reference_mode`) with the harness as the first gate; (3) re-run the
+actuator-lag model on top of a right-way FF — the earlier "offset doubles" result was measured with the FF
+fighting the feedback; (4) six tracks; (5) P1 step 1. Also fix `kappa_transition_warmup` to trigger on |Δκ|.
+
 ### T-METRIC-ACC-COMPOSITE-2026-10 — scorer work-package step 1 (2026-10-10, DONE; one item open)
 
 Motivation: Night-59 scored the first 14/14 ACC PASS 5–15 pts *lower* than the overlay stack it

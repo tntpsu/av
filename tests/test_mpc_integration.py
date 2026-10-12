@@ -327,3 +327,53 @@ class TestConfigFiles:
     def test_mpc_highway_v_max_tuned(self):
         cfg = self._load("mpc_highway.yaml")
         assert cfg["trajectory"]["mpc"]["mpc_v_max"] == pytest.approx(20.0)
+
+
+# ---------------------------------------------------------------------------
+# Curvature sign into the LMPC (T-LATERAL-LMPC-SPEED-MARGIN, 2026-10-11)
+# ---------------------------------------------------------------------------
+
+
+class TestLMPCCurvatureSign:
+    """The orchestrator signs curvature +left/−right; the LMPC heading row needs the opposite (the NMPC
+    path negates, the LMPC path never did). On the highway R500 left arc the legacy sign makes the
+    solver ask +0.010 at zero error (outside) where the recorded command is −0.033. `mpc_curvature_sign`
+    flips what the LMPC receives — INSIDE MPCController, so the camera-frame call here and the inter-frame
+    extrapolation call see the same sign (the 2026-10-11 Unity A/B flipped only the camera-frame call site and
+    the two writers fought; tests/test_lateral_sign_contract.py). This pins the plumbing on the PRODUCTION
+    config via the solver-facing `kappa_ref_used`; behaviour is certified by a Unity A/B."""
+
+    @staticmethod
+    def _kappa_seen_by_lmpc(sign: float) -> float:
+        import copy
+        from av_stack.config import load_config
+        from control.pid_controller import VehicleController
+        from control import mpc_controller as mc
+        cfg = copy.deepcopy(load_config(None))
+        cfg["trajectory"]["mpc"]["mpc_curvature_sign"] = sign
+        cfg["trajectory"]["mpc"]["mpc_actuator_model_enabled"] = False
+        seen = []
+        orig = mc.MPCController.compute_steering
+        def spy(self, *a, **k):
+            r = orig(self, *a, **k); seen.append(r.get("kappa_ref_used")); return r
+        mc.MPCController.compute_steering = spy
+        try:
+            vc = VehicleController(full_config=cfg)
+            st = {"heading": 0.0, "speed": 12.0, "position": (0.0, 0.0)}
+            ref = {"x": 0.0, "y": 5.0, "heading": 0.0, "velocity": 12.0, "curvature": 0.0}
+            for _ in range(12):
+                vc.compute_control(st, ref, return_metadata=True)
+            ref["curvature"] = 0.002                             # left curve in the orchestrator's convention
+            out = None
+            for _ in range(6):
+                out = vc.compute_control(st, ref, return_metadata=True)
+        finally:
+            mc.MPCController.compute_steering = orig
+        assert out["regime"] == 1, "production config must stay in LINEAR_MPC on an R500"
+        return float(seen[-1])
+
+    def test_legacy_sign_passes_map_curvature_unchanged(self):
+        assert self._kappa_seen_by_lmpc(1.0) == pytest.approx(+0.002)
+
+    def test_fixed_sign_hands_the_lmpc_its_own_convention(self):
+        assert self._kappa_seen_by_lmpc(-1.0) == pytest.approx(-0.002)

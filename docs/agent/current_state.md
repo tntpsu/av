@@ -3,6 +3,22 @@
 **Last updated:** 2026-10-11
 **Current milestone:** S2-M1 — **1 of 6 tracks meets the all-layers-≥95 bar (highway_65) as of 2026-10-11**, after the scorer started measuring at-car lateral error (09-28), the real clock (10-05) and speed compliance (10-11). The "5 of 5" of early October was the lookahead frame and a scorer with no task-completion term. ACC emergency brake authority restored on G2 (885 → 2 e-stops, 99.8% reduction) via plan `acc-idm-accel-plumbing.md`. Frenet-frame MPC reference remains in shadow-mode.
 
+## 2026-10-11 (pm) — LMPC curvature feedforward points out of every arc; the sign-flip A/B was invalid
+
+Roadmap item 3 (T-LATERAL-LMPC-SPEED-MARGIN). Plant identified by multisine injection (kinematic + understeer,
+actuator 0.65–0.85× with τ 0.25 s); the actuator-lag model fixes the R200 margin but doubles the curve offset, not
+promoted. Conventions pinned from two mirrored recordings show the LMPC heading row makes +κ demand a right turn
+while the orchestrator's +κ is left, so the kinematic FF opposes every arc and the feedback plus a −½Ld²κ
+lookahead-reference bias carry the curve. The `mpc_curvature_sign: -1` Unity A/B flipped only the camera-frame
+dispatch; the inter-frame extrapolation (57 % of frames) kept the old sign and the two writers alternated
+opposite commands into Unity (hill 0.4–0.9 m outside, command frozen at −0.105). **Invalid, not a refutation.**
+Sign moved into `MPCParams.curvature_sign` (both writers; default 1.0 = legacy). New
+`tests/test_lateral_sign_contract.py`: Unity-frame plant through the production controller, calibrated to Unity
+(highway 0.107 vs 0.094 m), strict xfails for the FF direction, the left-only warm-up and the R200 @ 13.5
+reproducer, plus the two-writer regression test. Harness prediction for a valid A/B: inward on every arc, smaller
+from 9.8 m/s up, overshoot inside at 6.6 unless the reference bias is fixed together. Production config unchanged
+(all experimental flags false). Next: the valid A/B, then the reference bias, then the lag model on a right-way FF.
+
 ## 2026-10-10/11 — Scorer work-package step 1: the score now measures the job
 
 Night-59 (first 14/14 ACC PASS) read 5–15 pts below the overlay stack it replaced for scorer

@@ -6433,6 +6433,10 @@ class VehicleController:
             # IMU yaw rate: negate Unity convention (negative Y = left turn)
             _imu_yaw_rate = -float(current_state.get('angular_velocity_y', 0.0))
 
+            # Orchestrator convention: +left/−right. Any sign adaptation for the LMPC lives in
+            # MPCController.compute_steering (MPCParams.curvature_sign) so that this camera-frame call and
+            # compute_interframe_steering() hand the solver the SAME curvature — on 2026-10-11 a flip applied
+            # here alone left the inter-frame writer on the opposite sign (tests/test_lateral_sign_contract.py).
             _kappa_for_mpc = float(reference_point.get('curvature', 0.0) or 0.0)
 
             # Convert Unity steering_angle_actual (degrees) to normalized [-1, 1]
