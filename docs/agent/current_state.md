@@ -1,7 +1,21 @@
 # AV Stack — Agent Memory: Current State
 
-**Last updated:** 2026-10-11
+**Last updated:** 2026-10-12
 **Current milestone:** S2-M1 — **1 of 6 tracks meets the all-layers-≥95 bar (highway_65) as of 2026-10-11**, after the scorer started measuring at-car lateral error (09-28), the real clock (10-05) and speed compliance (10-11). The "5 of 5" of early October was the lookahead frame and a scorer with no task-completion term. ACC emergency brake authority restored on G2 (885 → 2 e-stops, 99.8% reduction) via plan `acc-idm-accel-plumbing.md`. Frenet-frame MPC reference remains in shadow-mode.
+
+## 2026-10-12 — LMPC speed margin RESOLVED: speed-gated actuator model (commit 2d2404e)
+
+T-LATERAL-LMPC-SPEED-MARGIN closed. The 0.4-0.5 Hz margin mode (unity gain between 9.8 and 11.6 m/s) is fixed by
+the actuator-lag model (tau 0.25), gated by speed so it runs only above 9 m/s (two-solver dispatch, hysteresis).
+Margin A/B: mixed R200 @ 11.6 budget-on OOL 3/5 -> 0/4, overall 68.8 -> 94.2. Six-track sweep: no regression
+(worst hill -0.7), mixed Control bimodality (85/100) resolved to 100, hill curves stay kinematic (Traj 96.8).
+Production now: mpc_curvature_sign -1.0, mpc_actuator_model_enabled true, mpc_actuator_speed_gate_mps 9.0.
+Tonight Night-62 confirms the sign AND the gated actuator together (both independently A/B-validated). The time-
+domain inter-frame harness was built but does NOT carry the margin (kinematic plant phase too benign) — the
+margin lives in the identified loop transfer function; design on the oracle. **P1 lateral-budget ladder is now
+unblocked.** Next: raise lateral_accel_budget_g stepwise with the six-track regression; fix the left-only
+kappa_transition_warmup; verify the gate on hill/highway ACC scenarios. Also fixed today: H8 false FAIL was a
+missing scenario registry (created), two xdist-brittle sign-contract test tolerances.
 
 ## 2026-10-11 (pm) — LMPC curvature feedforward points out of every arc; the sign-flip A/B was invalid
 

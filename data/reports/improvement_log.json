@@ -398,5 +398,23 @@
     "prevention": "tests/test_lateral_sign_contract.py: one plant in Unity's measured frame driven through the production VehicleController (both writers), conventions pinned from mirrored recordings, calibrated to Unity to +-0.02 m; switches on controller inputs live in MPCParams, never at a call site (kill-switch memory rule 6).",
     "detection_method": "solver-level replay of a recorded arc (FF sign vs recorded command) -> mirror recordings -> Unity-frame harness; invalid A/B diagnosed from vehicle/steering_input alternating sign every frame",
     "detection_delay_iterations": 4
+  },
+  {
+    "date": "2026-10-12",
+    "commit_summary": "speed-gated actuator-lag model fixes the LMPC high-speed margin with no low-speed offset cost",
+    "issue": "LMPC lightly damped on R200 above ~10 m/s (0.4-0.5 Hz mode crossing unity gain) -> out-of-lane at 11.6; the actuator-lag model fixes it but ungated adds a curvature-scaled steady offset that regresses hills low-speed curves.",
+    "deduction_eliminated": "mixed_radius R200 @11.6 budget-on overall 68.8 -> 94.2 (OOL 3/5 -> 0/4); mixed-legacy Control bimodal 85/100 -> 100; no offset regression (hill curves kinematic below the 9 m/s gate)",
+    "tracks_affected": [
+      "mixed_radius",
+      "sweeping_highway",
+      "hill_highway (no regression)",
+      "highway_65 (neutral)"
+    ],
+    "root_cause": "Design: the actuator lag is a high-speed loop-stability issue; applying its model at all speeds mismatched the fix to its mechanism and incurred a structural feedforward offset on low-speed curves. Fix: speed-gate the model (two-solver dispatch with hysteresis).",
+    "process_stage": "design",
+    "process_sub": "design/missing-physics",
+    "prevention": "Frequency-domain oracle ranked the fix and showed the mechanism is high-speed; the speed gate matches the fix to that band. Unit tests pin bit-exact behaviour on both sides of the gate.",
+    "detection_method": "closed-loop sysid + oracle sensitivity ranking; Unity A/B then six-track /sweep",
+    "detection_delay_iterations": 1
   }
 ]

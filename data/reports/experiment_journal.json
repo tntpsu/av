@@ -939,7 +939,7 @@
     "fix_level": "ARCHITECTURE (controller model) \u2014 margin fix confirmed, promotion BLOCKED by a curvature-scaled offset",
     "hypothesis": "With the FF now pointing the right way, the actuator model fixes the margin AND the October steady offset is gone.",
     "outcome": "MIXED",
-    "outcome_status": "OPEN",
+    "outcome_status": "SUPERSEDED",
     "metric_before": 68.0,
     "metric_after": 86.6,
     "root_cause_of_failure": "actuator_ff_structural_offset",
@@ -949,8 +949,31 @@
       "tools/analyze/lmpc_closed_loop_oracle.py (candidate set)",
       "(no production change \u2014 kill-switch stays off)"
     ],
-    "superseded_by": null,
+    "superseded_by": "2d2404e (speed-gated actuator)",
     "resolved_by": null,
     "next": "Decision: (A) promote as-is \u2014 hill is ALREADY a FAIL (SpeedCompliance 43.8) so no gate-status change, and fixing lane departures at speed dominates a 0.05 m hill offset; or (C, recommended) speed-gate the actuator model (active >~9 m/s) so hill (6.6) never sees it \u2014 matches the fix to its high-speed mechanism, needs a QP rebuild on the speed threshold with hysteresis. (B) fix the actuator FF offset in the decomposition/alignment path \u2014 deepest, uncertain. Then one Unity A/B and the six-track regression."
+  },
+  {
+    "date": "2026-10-12",
+    "target_metric": "LMPC high-speed margin (R200 OOL) without a low-speed curve-offset regression",
+    "target_track": "mixed_radius R200 @11.6 budget-on (margin) + six-track regression",
+    "approach": "Speed-gated actuator model: MPCController holds a kinematic and an actuator-augmented solver, dispatches per frame by speed with hysteresis (mpc_actuator_speed_gate_mps=9.0). Margin A/B on mixed budget-on, then a fresh six-track /sweep on the promoted config.",
+    "fix_level": "ARCHITECTURE (controller) \u2014 PROMOTED",
+    "hypothesis": "The actuator model fixes the margin only at speed; gating it above 9 m/s keeps the fix where the margin problem is and leaves hill (6.6 m/s) kinematic so the structural offset never applies.",
+    "outcome": "IMPROVEMENT",
+    "outcome_status": "RESOLVED",
+    "metric_before": 68.8,
+    "metric_after": 94.2,
+    "root_cause_of_failure": null,
+    "root_cause_detail": "Margin A/B (mixed budget-on, gated vs production): OOL 3/5 -> 0/4, at-car RMSE 0.331 -> 0.165, P95 0.90 -> 0.36, overall 68.8 -> 94.2 (better than the ungated 1/4). Six-track sweep on the promoted config vs frozen baselines: s_loop 89.0->89.6, highway 99.6->99.7, hairpin 50.2->49.6, sweeping 98.5->99.3 (Traj 97.2), mixed 98.3->99.1 (Control bimodal 85/100 -> 100, resolved), hill 94.8->94.1 (curves kinematic below gate, Traj 96.8 recovered from the ungated 94.6; actuator engages only on hills faster straights). No regression >2pt, no new e-stops. Gates green: scoring-regression, comfort-gate, ACC closed-loop, MPC suites (200+). Unit tests pin bit-exact kinematic below / ungated-actuator above and the hysteresis.",
+    "iterations_spent": 1,
+    "files_changed": [
+      "control/mpc_controller.py (two-solver speed dispatch)",
+      "config/av_stack_config.yaml (actuator on, gate 9.0)",
+      "tests/test_mpc_actuator_model.py (gate tests)"
+    ],
+    "superseded_by": null,
+    "resolved_by": "2d2404e",
+    "next": "Tonight Night-62 confirms the sign promotion AND the gated actuator together (both independently A/B-validated). Then the P1 lateral-budget ladder is UNBLOCKED (it was gated on this margin) \u2014 raise lateral_accel_budget_g step by step with the six-track regression. Follow-ups: the left-only kappa_transition_warmup (|d kappa|), and verify the gated actuator on the hill/highway ACC scenarios (they run the LMPC above 9 m/s)."
   }
 ]

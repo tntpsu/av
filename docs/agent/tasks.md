@@ -1,6 +1,6 @@
 # AV Stack — Agent Memory: Tasks
 
-**Last updated:** 2026-10-11
+**Last updated:** 2026-10-12
 
 ---
 
@@ -93,7 +93,21 @@ infrastructure (one budget consumed by profile + comfort + preview, curve cap un
 committed. The ladder resumes only after T-LATERAL-LMPC-SPEED-MARGIN below is fixed — the budget is
 physics, lowering it again would re-create the proxy.
 
-### T-LATERAL-LMPC-SPEED-MARGIN — LMPC lightly damped on R200 at ≥ 11 m/s; PP saturates at the exit (2026-10-11, reproducer)
+### T-LATERAL-LMPC-SPEED-MARGIN — RESOLVED 2026-10-12 (speed-gated actuator model, commit 2d2404e)
+
+**Fixed.** The margin is a high-speed loop-stability problem (the 0.4-0.5 Hz mode crosses unity gain between
+9.8 and 11.6 m/s). The actuator-lag model (tau 0.25) is the fix (oracle-ranked, A/B-confirmed: mixed R200 @
+11.6 budget-on OOL 3/5 -> 0/4), but ungated it adds a curvature-scaled steady offset structural to its
+feedforward (insensitive to actuator_q_lat and tau) that regresses hill's 6.6 m/s curves. Solution:
+**speed-gate** it — MPCController holds a kinematic and an actuator-augmented solver and dispatches per frame
+with hysteresis (`mpc_actuator_speed_gate_mps: 9.0`, default 0 = ungated). Below the gate = bit-exact
+kinematic, above = bit-exact ungated actuator. Six-track sweep: no regression (worst hill -0.7), margin fixed,
+mixed Control bimodality (85/100) resolved to 100. **P1 lateral-budget ladder is now UNBLOCKED.** Remaining
+follow-ups: the left-only `kappa_transition_warmup` (fire on |dkappa|); verify the gate on the hill/highway ACC
+scenarios (they run the LMPC above 9 m/s). Full history of dead ends (gain-consistent FF, q_lat 4, bias, the
+invalid sign A/B, the time-domain harness negative result) retained below.
+
+### (history) T-LATERAL-LMPC-SPEED-MARGIN — LMPC lightly damped on R200 at ≥ 11 m/s (2026-10-11, reproducer)
 
 Found by P1 step 1 on mixed_radius. With the R200 driven at 11.6 m/s (profile budget 0.08 g) instead
 of 9.8 m/s (0.05 g): a 0.36–0.47 Hz lateral mode that is present at both speeds grows ×2.6–2.8 across

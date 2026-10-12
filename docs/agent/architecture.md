@@ -1,6 +1,6 @@
 # AV Stack — Agent Memory: Architecture
 
-**Last updated:** 2026-10-09
+**Last updated:** 2026-10-12
 
 ---
 
@@ -353,6 +353,16 @@ Golden recordings (all 5 registered in `tests/fixtures/golden_recordings.json`):
 
 1. **`--track-yaml` is mandatory.** Without it the vehicle falls through the road (315,000N impulse crash).
 2. **MPC q_lat operating-point sensitivity:** q_lat=10.0 (base) works on highway (κ≈0.003) but causes hunting on moderate curves (κ=0.007). Highway and mixed_radius overlays use q_lat=0.5. s_loop MPC never activates so q_lat is irrelevant for s_loop.
+**Speed-gated actuator-lag model (2026-10-12, T-LATERAL-LMPC-SPEED-MARGIN).** In the LINEAR_MPC regime the
+controller can run an actuator-augmented QP (4-state: adds the first-order steering actuator, tau 0.25 s) that
+fixes the high-speed loop margin (the 0.4-0.5 Hz mode crosses unity gain between 9.8 and 11.6 m/s). Because the
+augmented feedforward carries a curvature-scaled steady offset that only costs tight LOW-speed curves,
+`MPCController` holds TWO solvers (kinematic + actuator-augmented) and dispatches per frame by speed with
+hysteresis: actuator above `mpc_actuator_speed_gate_mps` (9.0), kinematic below. The QP structure is fixed per
+solver (no per-frame rebuild). `mpc_curvature_sign: -1.0` (2026-10-11) feeds the solver its own curvature
+convention in both the camera-frame and inter-frame writers. Kill-switches: `mpc_actuator_model_enabled`,
+`mpc_actuator_speed_gate_mps: 0` (ungated).
+
 3. **Regime mask in analysis scripts:** `mpc_mask = regime >= 0.5` (not `>= 1.5`). Regime encoding: 0=PP, 1=LINEAR_MPC, 2=NONLINEAR_MPC. Using `>= 1.5` silently drops all current MPC frames.
 4. **Curvature undercall is fundamental, not a training bug.** Camera lane polynomials see κ≈0.52× actual on R15. This is geometric — second-derivative amplification of noise. Map curvature is the correct source; do not attempt to fix via retraining.
 5. **Scoring cap mechanism:** `critical_cap=79.0` fires when Safety or Trajectory layer score is 60–79.9 (yellow). Cadence has zero weight in scoring. Score of exactly 79 is almost always a Trajectory-yellow cap, not cadence.
