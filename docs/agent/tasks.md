@@ -225,12 +225,33 @@ reproducer, straights oscillate), bias estimator (saturates at −0.00055, 1/3 O
   9.8 m/s up (R200 @ 11.6 0.19 → 0.07, R500 @ 12 0.107 → 0.048, R100 @ 9.8 0.25 → 0.05) but overshoots inside at
   6.6 m/s (0.033 out → 0.082 in) — the reference bias must be fixed in the same step.
 
-**Next (item 3, revised):** (1) valid Unity A/B of `mpc_curvature_sign: -1` (shared sign), 5 pairs on hill R100,
-mixed R200 with the 0.08 g budget, highway — accept only if Unity matches the harness prediction above (if it
-does not, diff the plant, do not tune); (2) remove the lookahead-reference bias (at-car reference or a
-curvature-corrected lookahead, `mpc_e_lat_reference_mode`) with the harness as the first gate; (3) re-run the
-actuator-lag model on top of a right-way FF — the earlier "offset doubles" result was measured with the FF
-fighting the feedback; (4) six tracks; (5) P1 step 1. Also fix `kappa_transition_warmup` to trigger on |Δκ|.
+**Valid A/B 2026-10-11 20:25–23:35 (sign in MPCParams, both writers, 5 pairs/track) — PROMOTED `mpc_curvature_sign: -1.0`:**
+
+| track | legacy → flipped | steady arc offset | verdict |
+|---|---|---|---|
+| highway_65 R500 @ 11.6 | overall 99.4 → 99.8, Traj 98.2 → 99.1, RMSE 0.036 → 0.017 | +0.102 → +0.048 (harness +0.107 → +0.048) | improvement 5/5 |
+| sweeping_highway R300 @ 11.6 | 98.2 → 99.0, **Traj 92.8 → 96.0** (now ≥ 95), RMSE 0.138 → 0.080 | +0.15 → +0.06 | improvement 5/5 |
+| hill_highway R100 @ 6.6 | 94.4 → 94.1, RMSE 0.046 → 0.062 | +0.050 out → −0.070 in (harness +0.033 → −0.082) | neutral, inside overshoot as predicted |
+| mixed_radius R200 @ 9.8 | 96.6 → 95.9, Traj 94.7 → 93.4, Control bimodal 85/100 both arms, steering p95 0.26 → 0.42 | −0.08 both | within noise; **watch the activity** |
+| mixed_radius R200 @ 11.6, budget 0.08 g | OOL 7 in 5 → 3 in 4; 0.42 Hz mode grows 1.6–3× in both | — | no effect on the margin |
+
+The steady-state harness matched Unity to ±0.02 m on four points; it predicted no OOL at 11.6 and was wrong there, so
+the dynamic margin is a loop-gain problem at 0.4–0.5 Hz above ~10 m/s that a kinematic plant without the inter-frame
+writer cannot carry. Three independent hints agree (actuator-lag model, oracle, and the accidental half-flip, whose
+two solvers anchored on each other's rate box and ran the R200 arc with steering spread 0.012 vs 0.30 — quiet, 0/3 OOL).
+Offline refuted the same night, no Unity spent: at-car reference (worse everywhere, +0.11 m on hill even with the right
+sign — the lookahead's −½Ld²κ offset is a useful pre-steer, not a bias to remove), curvature-corrected lookahead
+(worse everywhere), actuator-lag model on the right-way FF (overshoots inside 0.1–0.3 m), solver steer gain × 0.8
+(marginal). Mixed's Control layer is bimodal (85 with the mode excited, 100 when the arc stays quiet — 1 legacy run
+of 5) at the legacy speed already: the margin problem is present below the OOL threshold.
+
+**Next (item 3, revised 23:40):** (1) Night-61 confirmation — 6 tracks + 14 ACC scenarios (the highway/hill ACC
+scenarios run the LMPC and should move like highway_65); roll back with `mpc_curvature_sign: 1.0` if any track
+drops > 1 pt; (2) `kappa_transition_warmup` → trigger on |Δκ| (left-only today; strict xfail in the contract test);
+(3) harness: add the inter-frame writer, the per-frame rate limiter and the Smith predictor, calibrate on the 0.42 Hz
+growth (1.6–3× on R200 @ 11.6, quiet runs 0.2–0.9×); (4) design the margin fix on that harness (loop gain at
+0.4–0.5 Hz above 10 m/s: lag model with the right-way FF, speed-scheduled lateral weight), one Unity A/B after;
+(5) six tracks; (6) P1 step 1.
 
 ### T-METRIC-ACC-COMPOSITE-2026-10 — scorer work-package step 1 (2026-10-10, DONE; one item open)
 

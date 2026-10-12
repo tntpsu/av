@@ -908,5 +908,27 @@
     "superseded_by": null,
     "resolved_by": null,
     "next": "Valid Unity A/B of mpc_curvature_sign -1 with the sign applied inside MPCController (both writers), 5 pairs on hill R100, mixed R200 (budget on) and highway; expect inward shift everywhere and an INSIDE offset at 6.6 m/s unless the lookahead-reference bias is fixed in the same step (at_car reference or a curvature-corrected lookahead)."
+  },
+  {
+    "date": "2026-10-11",
+    "target_metric": "LMPC steady curve offset (at-car) + Trajectory layer on LMPC tracks; speed margin at 11.6",
+    "target_track": "highway_65, sweeping_highway, hill_highway, mixed_radius (9.8 legacy and 11.6 budget-on)",
+    "approach": "VALID Unity A/B of mpc_curvature_sign 1.0 -> -1.0 with the sign applied inside MPCController (camera-frame AND inter-frame writers), 5 pairs per track, 23 valid pairs total (20:25-23:35).",
+    "fix_level": "CODE_PATCH (sign at the controller boundary, kill-switched) -> PROMOTED",
+    "hypothesis": "Harness prediction: car moves inward on every arc; |offset| shrinks from 9.8 m/s up; overshoots inside at 6.6 m/s; no effect expected on the dynamic 0.42 Hz margin (plant lacks it).",
+    "outcome": "IMPROVEMENT",
+    "outcome_status": "RESOLVED",
+    "metric_before": 0.102,
+    "metric_after": 0.048,
+    "root_cause_of_failure": null,
+    "root_cause_detail": "highway R500@11.6: offset +0.102 -> +0.048 m (harness +0.107 -> +0.048), RMSE 0.036 -> 0.017, overall 99.4 -> 99.8, Traj 98.2 -> 99.1 (5/5). sweeping R300@11.6: offset +0.15 -> +0.06, RMSE 0.138 -> 0.080, Traj 92.8 -> 96.0 (crosses 95), overall 98.2 -> 99.0 (5/5). hill R100@6.6: +0.050 out -> -0.070 in (harness +0.033 -> -0.082), e_lat 0.24 -> 0.12, RMSE 0.046 -> 0.062, overall 94.4 -> 94.1 (neutral). mixed@9.8: 96.6 -> 95.9, Traj 94.7 -> 93.4, Control bimodal 85/100 in both arms, steering p95 0.26 -> 0.42 (watch). mixed@11.6 budget on: 7 OOL/5 -> 3 OOL/4, mode growth 1.6-3x in both -> the dynamic margin is a loop-gain problem at 0.42 Hz, not a sign problem; the kinematic harness predicted no OOL (missing inter-frame writer / rate limiter / noise). Offline refuted the same night (harness): at-car reference (worse everywhere), curvature-corrected lookahead (worse everywhere: the -0.5*Ld^2*kappa lookahead offset is a useful pre-steer), actuator-lag model on the right-way FF (overshoots inside 0.1-0.3 m), solver steer gain x0.8 (marginal).",
+    "iterations_spent": 2,
+    "files_changed": [
+      "config/av_stack_config.yaml (mpc_curvature_sign -1.0)",
+      "tests/test_lateral_sign_contract.py (calibration with the valid A/B; legacy defect tests)"
+    ],
+    "superseded_by": null,
+    "resolved_by": "pending commit",
+    "next": "Night-61 confirmation on 6 tracks + 14 ACC scenarios (ACC highway/hill scenarios run the LMPC too). Then: fix kappa_transition_warmup (|d kappa|), add the inter-frame writer + rate limiter + Smith predictor to the harness and calibrate on the 0.42 Hz growth, then design the margin fix (loop gain at 0.4-0.5 Hz above 10 m/s) before resuming P1."
   }
 ]

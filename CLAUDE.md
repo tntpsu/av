@@ -89,6 +89,7 @@ work on a missing `TESTS.md`.
 - **Lateral mode:** Pure Pursuit (not PID, not Stanley, not MPC)
 - **PID pipeline:** Bypassed in PP mode (S1-M35)
 - **Target speed:** 12.0 m/s
+- **LMPC curvature sign:** `trajectory.mpc.mpc_curvature_sign: -1.0` since 2026-10-11 (applied inside `MPCController` for the camera-frame AND inter-frame writers; 1.0 = the legacy wrong-way feedforward, kill-switch). See the Lateral Sign Contract protocol below.
 - **Perception:** Segmentation model active but needs retraining (current checkpoint mislabels car hood as lane). Retraining pipeline ready: `./tools/segmentation/train_pipeline.sh`. See `training/TRAINING_GUIDE.md`.
 
 ---

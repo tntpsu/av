@@ -23,6 +23,9 @@ mixed_radius, all RIGHT arcs; medians over arc frames |κ| > 0.003):
     `reference_point['heading']`                                                          path heading in vehicle frame, + RIGHT
     Unity ground-truth lookahead distance                                                 6.0 m; lookahead − at-car offset = −½Ld²κ
 
+PROMOTED 2026-10-11 23:40: mpc_curvature_sign -1.0 after the valid A/B (highway 99.4→99.8, sweeping Traj 92.8→96.0, hill
+neutral, mixed@9.8 within bimodal noise with more steering activity, mixed@11.6 margin unchanged). 1.0 is the kill-switch.
+
 TWO WRITERS: the orchestrator sends steering from compute_control once per camera frame AND from
 compute_interframe_steering up to three times in between (57 % of recorded frames carry an inter-frame update,
 and the inter-frame command differs from the camera-frame one by > 0.03 on 64–74 % of arc frames). Any sign
@@ -313,22 +316,31 @@ class TestLMPCMirrorSymmetry:
 
 class TestLMPCFeedforwardDirection:
 
-    @pytest.mark.xfail(strict=True, reason=(
-        "LMPC heading row e_heading += steer_gain·δ − κ·v·dt makes +κ demand +δ (right) while the orchestrator's +κ is a "
-        "LEFT turn (hill: command −0.081, yaw −0.061 rad/s on +κ arcs). Zero-error FF is +0.05 for κ=+0.005. The NMPC path "
-        "negates κ at dispatch (pid_controller `nmpc_kappa_ref = -kappa_ref`); the LMPC path does not. The 2026-10-11 "
-        "Unity A/B of `mpc_curvature_sign: -1` was INVALID (flipped one writer of two, see "
-        "TestInterframePathSharesTheCurvatureSign); the flip is still uncertified in Unity. Stays xfail until a valid A/B "
-        "promotes curvature_sign=-1 (then the default changes and this test turns green by itself)."))
+    @staticmethod
+    def _zero_error_command(kappa, speed, sign=None):
+        cfg = _production_cfg() if sign is None else _production_cfg(mpc_curvature_sign=sign)
+        c = MPCController(cfg); u = 0.0
+        for _ in range(8):
+            r = c.compute_steering(e_lat=0.0, e_heading=0.0, current_speed=speed, last_delta_norm=u,
+                                   kappa_ref=kappa, v_target=12.0, v_max=15.0, dt=FRAME_DT, delta_actual_norm=u)
+            u = float(r['steering_normalized'])
+        return u
+
     @pytest.mark.parametrize("kappa,speed", [(+0.010, 6.6), (+0.005, 11.6)])
     def test_zero_error_feedforward_points_into_the_left_arc(self, kappa, speed):
-        c = MPCController(_production_cfg())
-        u = None
-        for _ in range(8):
-            r = c.compute_steering(e_lat=0.0, e_heading=0.0, current_speed=speed, last_delta_norm=u or 0.0,
-                                   kappa_ref=kappa, v_target=12.0, v_max=15.0, dt=FRAME_DT, delta_actual_norm=u or 0.0)
-            u = float(r['steering_normalized'])
-        assert u < 0.0, f"zero-error command {u:+.4f} on a left arc must be negative (left) like the recorded −0.081"
+        """Production config (mpc_curvature_sign promoted to -1.0 on 2026-10-11): on an orchestrator LEFT arc
+        the zero-error command must be negative, like the recorded -0.081 on hill's left arcs."""
+        u = self._zero_error_command(kappa, speed)
+        assert u < 0.0, f"zero-error command {u:+.4f} on a left arc must be negative (left)"
+
+    @pytest.mark.parametrize("kappa,speed", [(+0.010, 6.6), (+0.005, 11.6)])
+    def test_legacy_sign_pointed_the_feedforward_out_of_the_arc(self, kappa, speed):
+        """The defect on record: with curvature_sign 1.0 the LMPC heading row e_heading += steer_gain*delta - kappa*v*dt
+        makes +kappa demand +delta (RIGHT) while the orchestrator's +kappa is a LEFT turn — the kinematic feedforward
+        opposed every arc (+0.03 to +0.045 for kappa=+0.005 at every speed) and the feedback carried the curve. The NMPC
+        path had negated kappa at dispatch since April; the LMPC path never did. Kill-switch: mpc_curvature_sign 1.0."""
+        u = self._zero_error_command(kappa, speed, sign=1.0)
+        assert u > 0.0, f"legacy zero-error command {u:+.4f} should point out of the left arc (documented defect)"
 
     def test_feedforward_is_mirror_symmetric(self):
         def ff(k):
@@ -348,10 +360,7 @@ ARCS = [
     pytest.param(-0.005, 11.6, id="mixed_R200_right_11.6"),
     pytest.param(+0.005, 11.6, id="R200_left_11.6"),
     pytest.param(+0.002, 12.0, id="highway_R500_left_12"),
-    pytest.param(-0.005, 13.5, id="R200_right_13.5", marks=pytest.mark.xfail(strict=True, reason=(
-        "T-LATERAL-LMPC-SPEED-MARGIN reproducer: with the wrong-way feedforward the production LMPC parks 0.31 m "
-        "outside at R200/13.5 m/s (0.19 at 11.6, 0.11 at R500/12 — Unity 0.094); the offset grows with speed as the "
-        "lookahead-reference bias ½Ld²κ is traded against a weakening feedback. Must stay failing until item 3 lands."))),
+    pytest.param(-0.005, 13.5, id="R200_right_13.5"),
 ]
 
 
@@ -364,6 +373,14 @@ class TestClosedLoopUnityFrame:
         assert (r['regime'][steady] == int(ControlRegime.LINEAR_MPC)).all(), f"regimes {np.unique(r['regime'][steady])}"
         assert float(np.max(np.abs(r['d']))) < 0.60, f"left the lane: max |d| {np.max(np.abs(r['d'])):.2f} m"
         assert abs(float(np.mean(r['d'][steady]))) < 0.30, f"steady offset {np.mean(r['d'][steady]):+.3f} m"
+
+    def test_legacy_sign_parked_0p3m_outside_at_r200_13p5(self):
+        """Speed-margin reproducer on record (T-LATERAL-LMPC-SPEED-MARGIN): with the legacy sign the production LMPC
+        parks 0.31 m outside at R200/13.5 m/s (0.19 at 11.6, 0.11 at R500/12 — Unity 0.102). The promoted sign
+        halves these (0.16 / 0.07 / 0.05) but does NOT restore the dynamic margin at 11.6 on the real stack
+        (Unity 2026-10-11: 3 OOL in 4 flipped runs vs 7 in 5 legacy; the 0.42 Hz mode grows 1.6-3x in both)."""
+        r = run_closed_loop(-0.005, 13.5, cfg=_production_cfg(mpc_curvature_sign=1.0))
+        assert abs(float(np.mean(r['d'][_arc_frames(13.5)]))) > 0.28
 
     def test_straight_from_offset_converges_without_sign_reversal(self):
         r = run_closed_loop(0.0, 10.0, n_frames=200, d0_right=+0.3)
@@ -463,13 +480,17 @@ class TestHarnessCalibration:
         r = run_closed_loop(kappa, speed, cfg=_production_cfg(mpc_curvature_sign=sign))
         return float(np.mean(np.abs(r['d'][_arc_frames(speed)]))), float(np.max(np.abs(r['d'])))
 
-    @pytest.mark.parametrize("kappa,speed,unity_legacy", [
-        pytest.param(+0.002, 12.0, 0.094, id="highway_R500_left_12"),
-        pytest.param(+0.010, 6.6, 0.065, id="hill_R100_left_6.6"),
-    ], )
-    def test_legacy_steady_offset_matches_unity_within_0p04m(self, kappa, speed, unity_legacy):
-        legacy = self._steady(kappa, speed, 1.0)[0]
-        assert legacy == pytest.approx(unity_legacy, abs=0.04), f"harness {legacy:.3f} vs Unity {unity_legacy:.3f}"
+    @pytest.mark.parametrize("kappa,speed,sign,unity_signed", [
+        pytest.param(+0.002, 12.0, 1.0, +0.102, id="highway_R500_left_12-legacy"),
+        pytest.param(+0.002, 12.0, -1.0, +0.048, id="highway_R500_left_12-flipped"),
+        pytest.param(+0.010, 6.6, 1.0, +0.050, id="hill_R100_left_6.6-legacy"),
+        pytest.param(+0.010, 6.6, -1.0, -0.070, id="hill_R100_left_6.6-flipped"),
+    ])
+    def test_steady_offset_matches_the_valid_unity_ab_within_0p04m(self, kappa, speed, sign, unity_signed):
+        """Valid A/B 2026-10-11 20:25–21:04 (sign in MPCParams, 5 pairs/track, steady arc frames): highway
+        +0.102 → +0.048 m, hill +0.050 → −0.070 m. Harness: +0.107 → +0.048, +0.033 → −0.082."""
+        harness = self._steady_signed(kappa, speed, sign)
+        assert harness == pytest.approx(unity_signed, abs=0.04), f"harness {harness:+.3f} vs Unity {unity_signed:+.3f}"
 
     @staticmethod
     def _steady_signed(kappa, speed, sign):

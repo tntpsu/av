@@ -16,8 +16,15 @@ Sign moved into `MPCParams.curvature_sign` (both writers; default 1.0 = legacy).
 `tests/test_lateral_sign_contract.py`: Unity-frame plant through the production controller, calibrated to Unity
 (highway 0.107 vs 0.094 m), strict xfails for the FF direction, the left-only warm-up and the R200 @ 13.5
 reproducer, plus the two-writer regression test. Harness prediction for a valid A/B: inward on every arc, smaller
-from 9.8 m/s up, overshoot inside at 6.6 unless the reference bias is fixed together. Production config unchanged
-(all experimental flags false). Next: the valid A/B, then the reference bias, then the lag model on a right-way FF.
+from 9.8 m/s up, overshoot inside at 6.6 unless the reference bias is fixed together.
+
+**23:40 — valid A/B done, `mpc_curvature_sign: -1.0` PROMOTED** (kill-switch 1.0). highway 99.4 → 99.8 and
+sweeping_highway Trajectory 92.8 → 96.0 (now passes the layer rule), hill neutral (offset flips +0.05 out → −0.07 in,
+as the harness said), mixed @ 9.8 within its bimodal noise with more steering activity (watch Night-61), mixed @ 11.6
+margin unchanged — the 0.42 Hz mode is loop gain, not sign; the kinematic harness cannot see it. Offline refuted:
+at-car reference, curvature-corrected lookahead, lag model on the right-way FF, steer gain 0.8. **2 of 6 tracks
+should now meet the all-layers bar if the nightly confirms (highway_65, sweeping_highway).** Next: Night-61 readout,
+warm-up |Δκ| fix, harness with the inter-frame writer, then the margin design.
 
 ## 2026-10-10/11 — Scorer work-package step 1: the score now measures the job
 
