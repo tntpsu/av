@@ -263,10 +263,17 @@ of 5) at the legacy speed already: the margin problem is present below the OOL t
 **Next (item 3, revised 23:40):** (1) Night-61 confirmation — 6 tracks + 14 ACC scenarios (the highway/hill ACC
 scenarios run the LMPC and should move like highway_65); roll back with `mpc_curvature_sign: 1.0` if any track
 drops > 1 pt; (2) `kappa_transition_warmup` → trigger on |Δκ| (left-only today; strict xfail in the contract test);
-(3) harness: add the inter-frame writer, the per-frame rate limiter and the Smith predictor, calibrate on the 0.42 Hz
-growth (1.6–3× on R200 @ 11.6, quiet runs 0.2–0.9×); (4) design the margin fix on that harness (loop gain at
-0.4–0.5 Hz above 10 m/s: lag model with the right-way FF, speed-scheduled lateral weight), one Unity A/B after;
-(5) six tracks; (6) P1 step 1.
+(3) **DONE with a NEGATIVE RESULT (2026-10-12):** built the inter-frame two-writer harness
+(`run_closed_loop_interframe`, test_lateral_sign_contract.py) — it faithfully runs compute_control at the 0.05 s
+camera tick AND compute_interframe_steering on the 0.025 s half-tick with the 100 ms delay preserved. It does NOT
+reproduce the speed-dependent 0.42 Hz margin: one seed on R200 @ 11.6 grew 1.87 (looked right) but across 6 seeds
+and longer runs it washes to ~1.1 and does not separate the reproducer (mean 1.33) from stable R500 @ 12 (0.98) /
+R100 @ 6.6 (1.13); white perception noise drives equal command jitter (~0.040) at every speed. The kinematic
+bicycle's phase at the mode is too benign to cross unity gain where Unity does. **The margin lives in the identified
+loop transfer function, not a time-domain kinematic plant.** (4) design the margin fix on the FREQUENCY-DOMAIN
+oracle (`tools/analyze/lmpc_closed_loop_oracle.py` + the measured 6–16× / 17–67× sensitivity peak), confirm the
+candidate does not destabilise under the inter-frame harness, then one Unity A/B; (5) six tracks; (6) P1 step 1.
+The time-domain harness stays for steady-state offset / sign / direction work (where it is calibrated to ±0.02 m).
 
 ### T-METRIC-ACC-COMPOSITE-2026-10 — scorer work-package step 1 (2026-10-10, DONE; one item open)
 

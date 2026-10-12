@@ -232,6 +232,94 @@ def _arc_frames(speed: float, straight_m: float = 40.0, settle_s: float = 6.0) -
     return slice(start, None)
 
 
+# ---------------------------------------------------------------------------
+# Inter-frame harness: the real effective control rate, both writers
+# ---------------------------------------------------------------------------
+#
+# The single-rate run_closed_loop above steps once per camera frame (0.05 s) and is calibrated to Unity's
+# STEADY-STATE offset (TestHarnessCalibration). It cannot carry the dynamic failure: on R200 @ 11.6 m/s with
+# the 0.08 g budget Unity leaves the lane (0.42 Hz mode growing 1.6–3× along the arc) while this plant sits
+# quietly at 0.19 m — the harness predicted no OOL and was wrong (noted at the sign promotion, 2026-10-11).
+# The piece it is missing is the SECOND writer: the orchestrator runs the LMPC through compute_control once
+# per 0.05 s camera frame AND through compute_interframe_steering ~1× in between (recorded 57 % of frames),
+# so Unity receives steering at ~0.025 s with the 100 ms pipeline delay unchanged — a higher effective loop
+# rate against the same delay, which is exactly what pushes a lightly-damped mode toward instability.
+#
+# This harness steps the plant at FINE_DT = 0.025 s, keeps the physical delay at 100 ms (= 4 fine steps),
+# calls compute_control at the camera ticks and compute_interframe_steering on the intermediate tick, and
+# commits each command through update_last_steering_norm like the orchestrator. Optional perception noise on
+# the camera-frame observation (σ from test_closedloop_stability's Unity calibration).
+#
+# NEGATIVE RESULT (2026-10-12). Adding the second writer did NOT reproduce the speed-dependent 0.42 Hz
+# margin. A single seed on R200 @ 11.6 showed growth 1.87 (vs ~0.2 single-rate), which looked like the
+# mechanism — but across 6 seeds and longer runs it washes to ~1.1 and does not separate the R200 reproducer
+# (mean 1.33) from the stable R500 @ 12 (0.98) or R100 @ 6.6 (1.13); white perception noise drives equal
+# command jitter (u_std ≈ 0.040) at every speed. The kinematic bicycle's phase at the mode frequency is too
+# benign to cross unity gain where Unity does (9.8 → 11.6 m/s). **The margin lives in the identified loop
+# transfer function, not a time-domain kinematic plant** — design the margin fix on the frequency-domain
+# oracle (tools/analyze/lmpc_closed_loop_oracle.py, the measured 6–16× / 17–67× sensitivity peak), with
+# Unity as the final gate. This harness stays as a FAITHFUL two-writer model: use it to confirm a candidate
+# fix does not destabilise under the real cadence, and for steady-state/sign work, not to predict the margin.
+
+FINE_DT = 0.025
+PERCEPTION_NOISE_LAT = 0.10      # m, 1σ (recording_20260320_222115 straight frames)
+PERCEPTION_NOISE_HEADING = 0.022  # rad, 1σ
+
+
+def run_closed_loop_interframe(kappa: float, speed: float, n_camera: int = 220, d0_right: float = 0.0,
+                               cfg: Optional[dict] = None, noise: bool = True,
+                               seed: int = 0) -> Dict[str, np.ndarray]:
+    """Drive the production VehicleController with BOTH writers around Path(kappa). One camera-frame
+    compute_control per 0.05 s and one compute_interframe_steering on the 0.025 s half-tick, plant stepping
+    at FINE_DT. Records the at-car offset / command / regime at the camera ticks (what the recorder logs)."""
+    cfg = cfg or _production_cfg()
+    vc = VehicleController(full_config=cfg)
+    vc.longitudinal_controller.max_speed = TRACK_SPEED_LIMIT_MPS
+    plant = UnityFramePlant(Path(kappa), speed, d0_right=d0_right,
+                            delay_frames=max(1, round(0.10 / FINE_DT)))
+    rng = np.random.default_rng(seed)
+    d, u, regime = [], [], []
+    kappa_cam = 0.0
+    for _ in range(n_camera):
+        # --- camera frame: full compute_control (perception noise on the observed error) ---
+        state, ref = plant.observe()
+        kappa_cam = float(ref['curvature'])
+        if noise:
+            ref = dict(ref)
+            nl = float(rng.normal(0, PERCEPTION_NOISE_LAT)); nh = float(rng.normal(0, PERCEPTION_NOISE_HEADING))
+            ref['gt_cross_track_lookahead_m'] = ref['gt_cross_track_lookahead_m'] + nl
+            ref['gt_cross_track_at_car_m'] = ref['gt_cross_track_at_car_m'] + nl
+            ref['gt_cross_track_vehicle_frame_at_car_m'] = ref['gt_cross_track_at_car_m']
+            ref['gt_heading_error_rad'] = ref['gt_heading_error_rad'] + nh
+        out = vc.compute_control(state, ref, return_metadata=True)
+        cmd = float(out['steering'])
+        vc.update_last_steering_norm(cmd)
+        d.append(plant.d_car_right()); u.append(cmd); regime.append(int(out.get('regime', -9)))
+        plant.step(cmd, dt=FINE_DT)
+        # --- inter-frame half-tick: compute_interframe_steering on FRESH GT state (no perception noise) ---
+        istate, iref = plant.observe()
+        res = vc.compute_interframe_steering(
+            e_lat=iref['gt_cross_track_road_frame_at_car_m'], e_heading=iref['gt_heading_error_rad'],
+            speed=speed, curvature=kappa_cam, dt=FINE_DT,
+            imu_yaw_rate=-istate['angular_velocity_y'])
+        if res is not None and res.get('steering') is not None:
+            icmd = float(res['steering']); vc.update_last_steering_norm(icmd)
+            plant.step(icmd, dt=FINE_DT)
+        else:
+            plant.step(cmd, dt=FINE_DT)   # no inter-frame update this cycle: hold the camera command
+    return {'d': np.array(d), 'u': np.array(u), 'regime': np.array(regime)}
+
+
+def _mode_growth(d: np.ndarray, sl: slice) -> float:
+    """Second-half RMS / first-half RMS of the detrended at-car error over `sl` — the recordings' own
+    'oscillation amplitude runaway' measure (project_lmpc_speed_margin_r200)."""
+    seg = d[sl]
+    seg = seg - np.mean(seg)
+    h = len(seg) // 2
+    first = np.sqrt(np.mean(seg[:h] ** 2)); second = np.sqrt(np.mean(seg[h:] ** 2))
+    return float(second / max(1e-6, first))
+
+
 # ===========================================================================
 # 1. The plant obeys the measured contract
 # ===========================================================================
@@ -478,6 +566,38 @@ class TestInterframePathSharesTheCurvatureSign:
 # ===========================================================================
 # 6. Harness calibration against Unity (known-good / known-bad rule)
 # ===========================================================================
+
+class TestInterframeHarnessIsAFaithfulTwoWriterModel:
+    """The inter-frame harness runs both writers at the real cadence. It is NOT a margin predictor (see the
+    NEGATIVE RESULT note above the function): these smoke tests pin only what is robust, so the tool does
+    not rot and nobody mistakes it for a margin gate."""
+
+    def test_both_writers_run_and_the_arc_stays_in_regime_one(self):
+        r = run_closed_loop_interframe(-0.005, 11.6, n_camera=200, noise=False)
+        assert set(r['regime'].tolist()) == {int(ControlRegime.LINEAR_MPC)}
+        assert np.all(np.isfinite(r['d'])) and float(np.max(np.abs(r['d']))) < 0.6
+
+    def test_the_second_writer_adds_command_activity_the_single_rate_loop_lacks(self):
+        """The whole point of the upgrade: the inter-frame path puts real steering between camera frames.
+        Under perception noise its arc command std is far above the single-rate loop's (~0.001)."""
+        sl = slice(int((40.0 / 11.6 + 4.0) / FRAME_DT), None)
+        single = run_closed_loop(-0.005, 11.6, n_frames=400)
+        inter = run_closed_loop_interframe(-0.005, 11.6, n_camera=400, noise=True, seed=0)
+        assert float(np.std(single['u'][sl])) < 0.01
+        assert float(np.std(inter['u'][slice(int((40.0 / 11.6 + 4.0) / FRAME_DT), None)])) > 0.02
+
+    @pytest.mark.parametrize("kappa,speed", [(-0.005, 11.6), (+0.002, 12.0), (+0.010, 6.6)])
+    def test_does_not_claim_to_separate_the_margin(self, kappa, speed):
+        """Documents the negative result as an executable fact: mean mode-growth over seeds does NOT exceed
+        1.5 on the reproducer and is not cleanly below 1.0 on the stable arcs — i.e. this metric cannot gate
+        the margin. If a future plant upgrade makes the reproducer robustly separate, DELETE this test and
+        promote the harness to a margin gate (and update the NEGATIVE RESULT note)."""
+        def arc(n):
+            return slice(int((40.0 / speed + 4.0) / FRAME_DT), n)
+        g = np.mean([_mode_growth(run_closed_loop_interframe(kappa, speed, n_camera=400, noise=True, seed=s)['d'],
+                                   arc(400)) for s in range(4)])
+        assert 0.6 < g < 1.6, f"mode-growth {g:.2f} — if this now separates reproducer from stable, see docstring"
+
 
 class TestHarnessCalibration:
     """A harness that cannot reproduce Unity's ranking is missing a mechanism — diff the plant, do not trust it.
