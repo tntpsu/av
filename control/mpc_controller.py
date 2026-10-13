@@ -1570,7 +1570,8 @@ class MPCController:
                 kappa_horizon = np.asarray(kappa_horizon, dtype=float) * self.params.curvature_sign
         # Speed-gated actuator model: pick the actuator-augmented solver above the gate, kinematic below,
         # with hysteresis so a car hovering at the threshold does not switch QP structure every frame.
-        if self._actuator_gated:
+        # getattr default: instances built via MPCController.__new__ (some unit tests) never ran __init__.
+        if getattr(self, '_actuator_gated', False):
             gate = self.params.actuator_speed_gate_mps
             hys = self.params.actuator_speed_gate_hysteresis_mps
             if not self._actuator_active and current_speed >= gate + hys:
@@ -1998,7 +1999,7 @@ class MPCController:
         """Reset solver state (e.g., on regime switch or after e-stop)."""
         self.solver._warm_x = None
         self.solver._warm_y = None
-        if self._actuator_gated:
+        if getattr(self, '_actuator_gated', False):
             # Clear both solvers' warm starts and start below the gate.
             self._solver_actuator._warm_x = self._solver_actuator._warm_y = None
             self._solver_kinematic._warm_x = self._solver_kinematic._warm_y = None
