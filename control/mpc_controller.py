@@ -127,6 +127,12 @@ class MPCParams:
     # This lets the feedforward step apply immediately instead of ramping over 6 frames.
     kappa_transition_warmup_enabled: bool = True
     kappa_transition_threshold: float = 0.005  # ~half of R100 kappa (0.010)
+    # Trigger the arc-entry warmup on a curvature-MAGNITUDE increase (|κ| rising = entering a curve, either
+    # direction) rather than a signed increase. The legacy signed test `κ − κ_last > thresh` only fired for one
+    # arc direction (left before the 2026-10-11 sign flip, right after it), so the opposite-direction entry got
+    # no rate-relax burst and drifted outside at turn-in (tests/test_lateral_sign_contract.py). True = symmetric
+    # (new, 2026-10-12); False = legacy signed behaviour (kill-switch).
+    kappa_transition_warmup_symmetric: bool = True
 
     # Speed-adaptive horizon
     speed_adaptive_horizon: bool = True
@@ -1802,10 +1808,20 @@ class MPCController:
         # straight into arc), reset the warmup counter.  The subsequent
         # warmup burst relaxes delta_rate_max to 1.0, letting the solver apply
         # the curvature feedforward in one step rather than ramping over ~6 frames
-        # (0.2 s) while the car drifts outside.  Triggers on kappa INCREASE only
-        # (straight→curve); curve exit is gradual and doesn't need this.
+        # (0.2 s) while the car drifts outside.  Triggers when |kappa| RISES above
+        # threshold (straight→curve, either direction); curve exit (|kappa| falling)
+        # is gradual and doesn't need this.
         if self.params.kappa_transition_warmup_enabled:
-            if kappa_ref - self._last_kappa_ref > self.params.kappa_transition_threshold:
+            if self.params.kappa_transition_warmup_symmetric:
+                _entering_curve = (
+                    abs(kappa_ref) - abs(self._last_kappa_ref)
+                    > self.params.kappa_transition_threshold
+                )
+            else:
+                _entering_curve = (
+                    kappa_ref - self._last_kappa_ref > self.params.kappa_transition_threshold
+                )
+            if _entering_curve:
                 self._frames_since_reset = 0   # trigger warmup burst
         self._last_kappa_ref = kappa_ref
 

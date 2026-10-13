@@ -996,6 +996,7 @@ trajectory:
     mpc_max_solve_time_ms: 8.0
     mpc_speed_adaptive_horizon: false
     mpc_curvature_preview_enabled: true
+    mpc_kappa_transition_warmup_symmetric: true   # arc-entry warmup fires on |kappa| rising (either direction); false = legacy signed (2026-10-12)
     mpc_curvature_preview_gain: 1.0
     # bias_correction was a workaround for r_steer=0.5 causing systematic
     # understeering. With r_steer=0.05 the QP has enough correction authority

@@ -337,6 +337,45 @@ class TestActuatorSpeedGate:
         c.reset(); assert c._actuator_active is False and c.solver is c._solver_kinematic
 
 
+class TestKappaTransitionWarmupTrigger:
+    """The arc-entry warmup burst (relaxes the first-step rate limit at straight→curve) must fire entering a
+    curve in EITHER direction. The legacy signed trigger `κ − κ_last > thresh` fired for one sign only."""
+
+    @staticmethod
+    def _fires(symmetric, kappa_from, kappa_to):
+        from control.mpc_controller import MPCController
+        c = MPCController({'trajectory': {'mpc': {
+            'mpc_kappa_transition_warmup_symmetric': symmetric,
+            'mpc_kappa_transition_threshold': 0.005, 'mpc_actuator_model_enabled': False}}})
+        kw = dict(e_lat=0.1, e_heading=0.0, current_speed=8.0, last_delta_norm=0.0,
+                  v_target=12.0, v_max=15.0, dt=0.05, delta_actual_norm=0.0)
+        # Settle _last_kappa_ref at kappa_from, well past the startup burst.
+        for _ in range(c.params.warmup_frames + 2):
+            c.compute_steering(kappa_ref=kappa_from, kappa_horizon=np.full(20, kappa_from), **kw)
+        c._frames_since_reset = 100                            # sentinel: clearly past any burst
+        c.compute_steering(kappa_ref=kappa_to, kappa_horizon=np.full(20, kappa_to), **kw)
+        # A fired warmup resets _frames_since_reset to 0; the per-frame increment then leaves it at 1.
+        # If it did not fire, the sentinel+increment leaves it at 101.
+        return c._frames_since_reset < 50
+
+    def test_symmetric_fires_entering_a_left_arc(self):
+        assert self._fires(True, 0.0, +0.010)
+
+    def test_symmetric_fires_entering_a_right_arc(self):
+        assert self._fires(True, 0.0, -0.010)
+
+    def test_symmetric_does_not_fire_on_curve_exit(self):
+        assert not self._fires(True, +0.010, 0.0)
+
+    def test_legacy_signed_fires_only_one_direction(self):
+        assert self._fires(False, 0.0, +0.010)
+        assert not self._fires(False, 0.0, -0.010)
+
+    def test_from_config_defaults_symmetric_true(self):
+        p = MPCParams.from_config({'trajectory': {'mpc': {}}})
+        assert p.kappa_transition_warmup_symmetric is True
+
+
 # ─────────────────── Gain-consistent actuator state (2026-10-11) ───────────────────
 
 class TestActuatorGainRatio:

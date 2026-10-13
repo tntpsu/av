@@ -199,7 +199,15 @@ class UnityFramePlant:
 # ---------------------------------------------------------------------------
 
 def _production_cfg(**mpc_overrides) -> dict:
+    """Production controller for the SIGN / reference / warm-up contract, which is the kinematic plant. The
+    actuator-lag model (promoted 2026-10-12, mpc_actuator_model_enabled true, speed gate 9.0) is orthogonal to
+    these mechanisms and has its own calibrated steady offset — it is exercised in test_mpc_actuator_model.py,
+    not here. Force it OFF so this file's steady-offset numbers stay the Unity SIGN-A/B calibration (actuator off)
+    and do not become speed-dependent across the 9 m/s gate. A test can still override it."""
     cfg = copy.deepcopy(load_config(None))
+    cfg['trajectory']['mpc'].setdefault('mpc_actuator_model_enabled', False)
+    cfg['trajectory']['mpc']['mpc_actuator_model_enabled'] = False
+    cfg['trajectory']['mpc']['mpc_actuator_speed_gate_mps'] = 0.0
     cfg['trajectory']['mpc'].update(mpc_overrides)
     return cfg
 
@@ -371,8 +379,9 @@ class TestPlantMatchesRecordedConventions:
 # 2. Mirror symmetry of the LMPC wrapper: u(−x) must equal −u(x)
 # ===========================================================================
 
-def _wrapper_sequence(sign: float, speed: float = 6.6, kappa: float = 0.010, n: int = 60, entry: int = 10) -> np.ndarray:
-    c = MPCController(_production_cfg())
+def _wrapper_sequence(sign: float, speed: float = 6.6, kappa: float = 0.010, n: int = 60, entry: int = 10,
+                      **mpc_overrides) -> np.ndarray:
+    c = MPCController(_production_cfg(**mpc_overrides))
     out, last, dact = [], 0.0, 0.0
     e, psi = 0.28 * sign, 0.01 * sign
     for k in range(n):
@@ -393,13 +402,19 @@ class TestLMPCMirrorSymmetry:
         # 1e-5 still catches a real sign/gain asymmetry (those are O(1e-1)) without flagging solver jitter.
         assert float(np.max(np.abs(a[30:] + b[30:]))) < 1e-5
 
-    @pytest.mark.xfail(strict=True, reason=(
-        "kappa_transition_warmup fires on `kappa_ref - last > threshold` (mpc_controller.py:1768), a SIGNED increase, "
-        "so it only triggers when entering a LEFT arc: the left-arc command steps 0.14 toward zero for ~5 frames at "
-        "entry, the right-arc command does not (asymmetry 0.076, measured 2026-10-11)."))
     def test_arc_entry_is_symmetric(self):
+        """FIXED 2026-10-12 (mpc_kappa_transition_warmup_symmetric). The warmup used to fire on a SIGNED
+        curvature increase `κ − κ_last > threshold`, so only one arc direction got the rate-relax burst at
+        turn-in (left before the sign flip, right after) — asymmetry 0.27. Firing on |κ| rising makes both
+        directions get it; entry is now mirror-symmetric to solver precision."""
         a, b = _wrapper_sequence(+1.0), _wrapper_sequence(-1.0)
-        assert float(np.max(np.abs(a + b))) < 1e-6
+        assert float(np.max(np.abs(a + b))) < 1e-5
+
+    def test_legacy_signed_warmup_is_asymmetric_at_entry(self):
+        """The defect on record: the legacy signed trigger relaxes the rate limit for one arc direction only."""
+        a = _wrapper_sequence(+1.0, mpc_kappa_transition_warmup_symmetric=False)
+        b = _wrapper_sequence(-1.0, mpc_kappa_transition_warmup_symmetric=False)
+        assert float(np.max(np.abs(a + b))) > 0.1
 
 
 # ===========================================================================
