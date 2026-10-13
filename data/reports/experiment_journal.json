@@ -843,7 +843,7 @@
     "fix_level": "CONFIG (base, kill-switched)",
     "hypothesis": "The profile's 0.05 g tracking budget is a PP-capability proxy; raising it toward comfort lifts SpeedCompliance without safety loss.",
     "outcome": "MIXED",
-    "outcome_status": "BLOCKED",
+    "outcome_status": "SUPERSEDED",
     "metric_before": 44.0,
     "metric_after": 86.0,
     "root_cause_of_failure": "LMPC lightly damped on R200 at 11.6 m/s (0.4 Hz mode grows x2.6-2.8 along the curve), PP saturates at the hand-off; OOL 3/4 on mixed_radius",
@@ -855,7 +855,7 @@
       "config/av_stack_config.yaml",
       "tests/test_lateral_accel_budget.py"
     ],
-    "superseded_by": null,
+    "superseded_by": "81f33f5 (P1 promoted on the fixed stack)",
     "resolved_by": null
   },
   {
@@ -975,5 +975,26 @@
     "superseded_by": null,
     "resolved_by": "2d2404e",
     "next": "Tonight Night-62 confirms the sign promotion AND the gated actuator together (both independently A/B-validated). Then the P1 lateral-budget ladder is UNBLOCKED (it was gated on this margin) \u2014 raise lateral_accel_budget_g step by step with the six-track regression. Follow-ups: the left-only kappa_transition_warmup (|d kappa|), and verify the gated actuator on the hill/highway ACC scenarios (they run the LMPC above 9 m/s)."
+  },
+  {
+    "date": "2026-10-12",
+    "target_metric": "curve speed (SpeedCompliance) across the stack without a tracking/OOL regression",
+    "target_track": "all six lateral tracks",
+    "approach": "Re-run P1 step 1 (lateral_accel_budget_enabled false->true at 0.08 g) on the gated-actuator + sign stack. A/B on mixed/hill/s_loop, then budget-ON sweep of highway/sweeping/hairpin.",
+    "fix_level": "CONFIG (promoted) \u2014 on top of the ARCHITECTURE margin fix",
+    "hypothesis": "With the margin and sign fixed, the 0.08 budget that previously put mixed OOL is now a pure speed gain.",
+    "outcome": "IMPROVEMENT",
+    "outcome_status": "RESOLVED",
+    "metric_before": 94.4,
+    "metric_after": 100.0,
+    "root_cause_of_failure": null,
+    "root_cause_detail": "Six tracks vs frozen baselines: s_loop 89.0->91.2, highway 99.6->99.8, hairpin 50.2->49.2, sweeping 98.5->99.2, mixed 98.3->98.4, hill 94.8->97.7. No >2pt drop, no new OOL. SpeedCompliance up on every sub-100 track (s_loop 34.8->47.5, hill 43.5->86.6, mixed 94.4->100, hairpin 88->99.4). mixed budget off->on: Traj 93.5->95.1, RMSE 0.115->0.099, OOL 0 (was 3/4 pre-fix). hill drives curves at 8.6 vs 6.5 m/s with BETTER tracking (RMSE 0.058->0.047) \u2014 the sign fix, not the actuator (hill curves stay below the 9 m/s gate).",
+    "iterations_spent": 1,
+    "files_changed": [
+      "config/av_stack_config.yaml (lateral_accel_budget_enabled true)"
+    ],
+    "superseded_by": null,
+    "resolved_by": "81f33f5",
+    "next": "Night-62 confirms all 6 + ACC. Next ladder step: 0.08 -> higher g with the six-track regression each step, until a track hits a real tracking limit. Then P2 of the speed-owner consolidation."
   }
 ]

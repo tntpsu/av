@@ -416,5 +416,24 @@
     "prevention": "Frequency-domain oracle ranked the fix and showed the mechanism is high-speed; the speed gate matches the fix to that band. Unit tests pin bit-exact behaviour on both sides of the gate.",
     "detection_method": "closed-loop sysid + oracle sensitivity ranking; Unity A/B then six-track /sweep",
     "detection_delay_iterations": 1
+  },
+  {
+    "date": "2026-10-12",
+    "commit_summary": "promote 0.08 g lateral-accel budget (P1 step 1) on the fixed stack",
+    "issue": "The stack drove curves slowly (SpeedCompliance 34-94 on four tracks); the 0.08 budget that would fix this had been blocked by the LMPC speed margin (mixed OOL).",
+    "deduction_eliminated": "SpeedCompliance: s_loop 34.8->47.5, hill 43.5->86.6, mixed 94.4->100, hairpin 88->99.4; mixed overall budget off->on 96.9->98.4",
+    "tracks_affected": [
+      "s_loop",
+      "hill_highway",
+      "mixed_radius",
+      "hairpin_15",
+      "sweeping_highway"
+    ],
+    "root_cause": "Requirements/design: curve speed was unscored until SpeedCompliance (10-11) and capped by a conservative tracking budget; raising it needed the margin fix first.",
+    "process_stage": "design",
+    "process_sub": "design/missing-physics",
+    "prevention": "Speed-owner consolidation: one lateral budget replaces the stacked proxies; raise it on the regression ladder.",
+    "detection_method": "A/B + six-track sweep",
+    "detection_delay_iterations": 0
   }
 ]
