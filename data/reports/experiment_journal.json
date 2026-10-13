@@ -1017,5 +1017,26 @@
     "superseded_by": null,
     "resolved_by": null,
     "next": "Unity A/B after Night-62: raise mpc_max_map_curvature 0.015 -> ~0.07 on s_loop + hairpin, LMPC vs PP, at-car Trajectory. If it transfers, promote; if kinematic LMPC falls short, validate the dynamic bicycle model."
+  },
+  {
+    "date": "2026-10-12",
+    "target_metric": "tight-curve Trajectory (s_loop R40, hairpin R15) via extending the LMPC regime boundary",
+    "target_track": "s_loop, hairpin_15",
+    "approach": "Unity A/B control.regime.mpc_max_map_curvature 0.015 (PP) vs 0.08 (LMPC) on the promoted stack, 5 pairs each.",
+    "fix_level": "CONFIG (regime boundary) \u2014 REFUTED as-is",
+    "hypothesis": "Routing the tight tracks to the improved LMPC tracks them better than PP (harness said R40 0.24 / R15 0.41).",
+    "outcome": "MIXED",
+    "outcome_status": "OPEN",
+    "metric_before": 49.8,
+    "metric_after": 29.0,
+    "root_cause_of_failure": "lmpc_tight_curve_aggressiveness",
+    "root_cause_detail": "The LMPC tracks the sustained tight ARC far better than PP (hairpin tight-RMS 0.955->0.072, Traj 50.6->85.5; s_loop 0.367->0.233) \u2014 refuting feedback_sloop_pp_ceiling (kinematic LMPC CAN track R15). BUT overall collapses: hairpin 49.8->29.0 (Control 97.6->65.0, OOL 0->5), s_loop 91.0->38.5 (Control 98->72, OOL 0->4). The LMPC holds the line with aggressive, jerky, occasionally-unstable steering. So Blocker 2 is a comfort/stability/transition problem at tight radius, NOT tracking capability. Kinematic harness over-promised the overall (right about sustained-arc tracking, blind to the Control collapse / OOL) \u2014 same lesson as the margin. Config restored to production (mpc_max_map_curvature 0.015).",
+    "iterations_spent": 1,
+    "files_changed": [
+      "docs/plans/path-to-all-green.md"
+    ],
+    "superseded_by": null,
+    "resolved_by": null,
+    "next": "Diagnose WHERE the LMPC fails on tight curves (entry cold-start / PP-LMPC handoff / steady jerk). Try a tight-curve r_steer_rate / jerk / q_lat schedule or a smoother regime blend to recover Control+OOL while keeping Traj 85. If un-smoothable within comfort, the dynamic model or a formalized floor."
   }
 ]

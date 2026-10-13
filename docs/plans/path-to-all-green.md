@@ -65,7 +65,28 @@ Pure-Pursuit CONTROL-LAW failure, not a physics or steering-authority floor:
 
 **Plan, in order (each gate the next) — REFINED by the above:**
 
-0. **Try extending the LMPC boundary FIRST (cheaper than the dynamic model).** Unity A/B: raise
+**Unity A/B 2026-10-12 (mpc_max_map_curvature 0.015 → 0.08, s_loop + hairpin, 5 pairs) — boundary extension
+REFUTED, but it reframes the problem.** The LMPC tracks the sustained tight ARC far better than PP, exactly as
+the harness promised — hairpin tight-arc RMS 0.955 → **0.072** (Traj 50.6 → 85.5), s_loop 0.367 → 0.233. BUT
+overall COLLAPSES: hairpin 49.8 → 29.0 (Control 97.6 → **65.0**, OOL 0 → 5), s_loop 91.0 → 38.5 (Control 98 →
+72, OOL 0 → 4). So the LMPC holds the tight line but with **aggressive, jerky, occasionally-unstable steering**
+(Control collapse + out-of-lane), not a tracking-capability limit. **This refutes the old `feedback_sloop_pp_
+ceiling` premise** (the kinematic LMPC CAN track R15 at 0.072) and reframes Blocker 2: the problem is making
+the LMPC track tight curves SMOOTHLY (comfort / stability / transition handling), not whether it can track
+them. The kinematic-harness over-promised the OVERALL outcome (same lesson as the margin) while being right
+about sustained-arc tracking.
+
+**Refined plan for Blocker 2 (2026-10-12 pm):**
+0. (done) Boundary extension alone — refuted: LMPC tracks the arc, collapses Control + leaves the lane.
+1. **Diagnose WHERE the LMPC fails on tight curves** (tomorrow): entry cold-start, the PP↔LMPC handoff/blend,
+   exit, or steady-state jerk/aggressiveness. hairpin Control 65 says it is a comfort/stability problem; the
+   lever is likely a tight-curve-specific r_steer_rate / jerk / q_lat schedule, or a smoother regime blend.
+2. If smoothing the LMPC's tight-curve steering recovers Control + OOL while keeping the arc tracking (Traj
+   85+), extend the boundary and promote — s_loop/hairpin Trajectory could clear the bar without the dynamic
+   model. If it cannot be made smooth within comfort, THEN the dynamic model / a floor.
+
+(superseded first-try note below)
+0-OLD. **Try extending the LMPC boundary FIRST (cheaper than the dynamic model).** Unity A/B: raise
    `mpc_max_map_curvature` 0.015 → ~0.07 on s_loop and hairpin, LMPC vs PP, measure at-car Trajectory. The
    harness says the LMPC control law should track these far better; if it transfers, s_loop/hairpin improve
    without the dynamic model. If the kinematic LMPC falls short of the harness promise in Unity, THEN:
