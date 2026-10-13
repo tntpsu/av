@@ -865,7 +865,7 @@ trajectory:
   # comfort governor and curve preview (scale 1.0). Legacy when disabled: profile 0.05 g, comfort
   # 0.20 g / 2.5 = 0.08 g effective. Ladder 0.08 -> 0.12 -> 0.16 -> 0.20, each step a 6-track A/B with
   # out-of-lane / e-stop as the guard. The curve cap keeps its own 0.20 / 0.26 g until P2.
-  lateral_accel_budget_enabled: false
+  lateral_accel_budget_enabled: true
   lateral_accel_budget_g: 0.08
   velocity_profiler:
     enabled: true                          # master switch for velocity profile
