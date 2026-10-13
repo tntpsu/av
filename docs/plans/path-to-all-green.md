@@ -50,7 +50,25 @@ too large at R < 67 m (the 0.111 m s_loop RMSE floor is that mismatch). These tr
 so this is a *geometry/model* problem, not the high-speed margin we just fixed — the actuator gate is off
 below 9 m/s and does not help here.
 
-**Plan, in order (each gate the next):**
+**Characterized 2026-10-12 (offline, today's fresh recordings + harness).** The tight-curve error is a
+Pure-Pursuit CONTROL-LAW failure, not a physics or steering-authority floor:
+- s_loop R40 @ 5.2 m/s: PP RMS 0.36, 97 % random (not apex-cut bias), error grows with curvature (corr +0.40),
+  steering has headroom (max 0.50 of 0.70). PP cannot track the fast R40 reversals.
+- hairpin R15 @ 3.3 m/s: PP RMS 0.98, runs WIDE (outside, not apex-cut), steering SATURATES (0.70) recovering —
+  yet the geometric steady-state demand at R15 is only ~0.33 normalized, so saturation is PP falling behind,
+  not a physical limit.
+- Both run PP because `mpc_max_map_curvature` 0.015 routes κ > 0.015 away from the LMPC.
+- In the harness the IMPROVED LMPC (sign + actuator + symmetric warmup) tracks R40 at 0.24 and R15 at 0.41 —
+  far better than PP. **Caveat: the harness is kinematic and cannot prove this transfers to Unity** (the old
+  `feedback_sloop_pp_ceiling` memory said the OLD LMPC couldn't help here — that premise may have changed, but
+  only a Unity A/B settles it).
+
+**Plan, in order (each gate the next) — REFINED by the above:**
+
+0. **Try extending the LMPC boundary FIRST (cheaper than the dynamic model).** Unity A/B: raise
+   `mpc_max_map_curvature` 0.015 → ~0.07 on s_loop and hairpin, LMPC vs PP, measure at-car Trajectory. The
+   harness says the LMPC control law should track these far better; if it transfers, s_loop/hairpin improve
+   without the dynamic model. If the kinematic LMPC falls short of the harness promise in Unity, THEN:
 
 1. **Characterize the floor** with the same closed-loop sysid that cracked the margin (steering injection on
    s_loop/hairpin at 4–6 m/s). Decide: is the tight-curve error model-plant mismatch, a feedforward

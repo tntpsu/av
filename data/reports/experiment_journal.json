@@ -996,5 +996,26 @@
     "superseded_by": null,
     "resolved_by": "81f33f5",
     "next": "Night-62 confirms all 6 + ACC. Next ladder step: 0.08 -> higher g with the six-track regression each step, until a track hits a real tracking limit. Then P2 of the speed-owner consolidation."
+  },
+  {
+    "date": "2026-10-12",
+    "target_metric": "tight-curve Trajectory floor (s_loop R40, hairpin R15) \u2014 characterization",
+    "target_track": "s_loop, hairpin_15",
+    "approach": "Offline: decompose the PP tracking error on today fresh recordings (bias vs noise, curvature correlation, steering saturation, inside/outside); then run the improved LMPC on R40/R15 geometry in the Unity-frame harness vs the PP boundary.",
+    "fix_level": "characterization (no change)",
+    "hypothesis": "The tight-curve floor is a PP control-law limit, not physics; the improved LMPC would track better.",
+    "outcome": "IMPROVEMENT",
+    "outcome_status": "OPEN",
+    "metric_before": 0.0,
+    "metric_after": 0.0,
+    "root_cause_of_failure": null,
+    "root_cause_detail": "PP error is control-law, not authority/physics: s_loop R40 RMS 0.36 (97% random, steering headroom to 0.50/0.70), hairpin R15 RMS 0.98 (runs WIDE, steering saturates recovering, but steady-state demand only 0.33 norm). Both run PP (mpc_max_map_curvature 0.015 routes them off the LMPC). Harness: improved LMPC tracks R40 0.24 / R15 0.41 vs PP much worse \u2014 points the fix at EXTENDING THE LMPC BOUNDARY first, before the dynamic model. CAVEAT: harness is kinematic, cannot prove Unity transfer (old feedback_sloop_pp_ceiling said OLD LMPC could not help; premise may have changed). Config untouched.",
+    "iterations_spent": 1,
+    "files_changed": [
+      "docs/plans/path-to-all-green.md"
+    ],
+    "superseded_by": null,
+    "resolved_by": null,
+    "next": "Unity A/B after Night-62: raise mpc_max_map_curvature 0.015 -> ~0.07 on s_loop + hairpin, LMPC vs PP, at-car Trajectory. If it transfers, promote; if kinematic LMPC falls short, validate the dynamic bicycle model."
   }
 ]
