@@ -1106,6 +1106,12 @@ safety:
   emergency_stop_end_run_after_seconds: 3.0
   emergency_stop_use_gt_lane_boundaries: true
   emergency_stop_gt_lane_boundary_margin: 0.05
+  # T-SAFETY-ESTOP-FRAME (2026-10-15): the GT lane-line fields are a LOOKAHEAD quantity (6-8 m ahead); testing them
+  # against this at-car-scale margin false-fired on tight curves (R15/R40) while the car was centred. 'at_car' tests
+  # the car's own cross-track vs the lane half-width (from the lookahead line spacing, fallback below).
+  # 'lookahead' = legacy line-position test (kill-switch).
+  emergency_stop_gt_lane_boundary_frame: at_car
+  emergency_stop_lane_half_width_m: 1.8        # fallback when lane lines are unusable (target_lane_width_m 3.6 / 2)
   lane_width: 7.0
   car_width: 1.9
   allowed_outside_lane: 1.0

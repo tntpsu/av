@@ -138,6 +138,58 @@ class CurvatureContract:
     selection_reason: str
 
 
+def gt_lane_boundary_offroad(
+    frame: str,
+    at_car_cross_track_m,
+    left_line_x_m,
+    right_line_x_m,
+    margin_m: float,
+    fallback_half_width_m: float,
+) -> Tuple[bool, bool, dict]:
+    """Decide whether the car is off the GT lane boundary. Pure function so the frame choice is testable.
+
+    T-SAFETY-ESTOP-FRAME (2026-10-15). `groundTruthLeft/RightLaneLineX` are computed by Unity AT THE LOOKAHEAD
+    (6–8 m ahead, for visualizer/perception alignment — AVBridge.cs `GetLanePositionsAtLookahead`). On a tight
+    curve the lane that far ahead is displaced by ~½·Ld²·κ plus heading (1.2–1.9 m at R15/R40), so a car that
+    is centred AT THE CAR reads a lane line past the 0.05 m margin and the legacy check fired a false e-stop —
+    once per run, same spot, in every LMPC-on-tight-curve run of 2026-10-15 (at-car −0.2 m, left line +0.1 m).
+    Pure Pursuit escaped it only by running wide. Third instance of the metric-frame defect class (lateral
+    scoring frame 09-28, ACC radar range 09-23).
+
+    frame == 'at_car' (default): compare the at-car cross-track (+right; the scorer's truth,
+      `groundTruthSelectedLaneCrossTrackRoadFrameAtCar`) against the lane half-width minus the margin. The
+      half-width comes from the lookahead line SPACING (right − left), which stays correct when the offsets are
+      displaced; falls back to `fallback_half_width_m` when the lines are unusable.
+    frame == 'lookahead' (legacy kill-switch): the original line-position test.
+
+    Returns (offroad_left, offroad_right, details).
+    """
+    details = {'frame': frame, 'half_width_m': None, 'at_car_cross_track_m': None}
+    if frame == 'lookahead':
+        if left_line_x_m is None or right_line_x_m is None:
+            return False, False, details
+        left = float(left_line_x_m); right = float(right_line_x_m)
+        return (left > margin_m), (right < -margin_m), details
+    # at_car
+    if at_car_cross_track_m is None:
+        return False, False, details
+    d = float(at_car_cross_track_m)
+    half = None
+    if left_line_x_m is not None and right_line_x_m is not None:
+        try:
+            width = float(right_line_x_m) - float(left_line_x_m)
+            if 1.0 <= width <= 10.0:        # sane lane width (m)
+                half = 0.5 * width
+        except (TypeError, ValueError):
+            half = None
+    if half is None:
+        half = float(fallback_half_width_m)
+    details['half_width_m'] = half
+    details['at_car_cross_track_m'] = d
+    limit = max(0.0, half - margin_m)
+    return (d < -limit), (d > limit), details
+
+
 def _curvature_map_authority_lost(
     map_curvature_abs: Optional[float], curvature_primary_source: str
 ) -> bool:
@@ -9397,6 +9449,14 @@ class AVStack:
         gt_lane_boundary_margin = float(
             self.safety_config.get('emergency_stop_gt_lane_boundary_margin', 0.05)
         )
+        # T-SAFETY-ESTOP-FRAME: 'at_car' (default) tests the car's own cross-track against the lane half-width;
+        # 'lookahead' is the legacy line-position test that false-fired on tight curves (kill-switch).
+        gt_lane_boundary_frame = str(
+            self.safety_config.get('emergency_stop_gt_lane_boundary_frame', 'at_car')
+        )
+        gt_lane_boundary_fallback_half_width = float(
+            self.safety_config.get('emergency_stop_lane_half_width_m', 1.8)
+        )
         def _first_present(keys):
             for key in keys:
                 if key in vehicle_state_dict and vehicle_state_dict.get(key) is not None:
@@ -9419,6 +9479,9 @@ class AVStack:
                 'ground_truth_right_lane_x',
             ]
         )
+        # The scorer's at-car truth (+right); the lane-line fields above are a LOOKAHEAD quantity.
+        gt_at_car_cross_track = _first_present(['groundTruthSelectedLaneCrossTrackRoadFrameAtCar'])
+        gt_estop_details = {}
         gt_boundary_offroad_left = False
         gt_boundary_offroad_right = False
         gt_boundary_offroad = False
@@ -9456,11 +9519,14 @@ class AVStack:
                              or abs(gt_right_lane_line_x) > 1e-6)
                     )
                     if gt_bounds_available:
-                        gt_boundary_offroad_left = (
-                            gt_left_lane_line_x > gt_lane_boundary_margin
-                        )
-                        gt_boundary_offroad_right = (
-                            gt_right_lane_line_x < -gt_lane_boundary_margin
+                        (gt_boundary_offroad_left, gt_boundary_offroad_right,
+                         gt_estop_details) = gt_lane_boundary_offroad(
+                            gt_lane_boundary_frame,
+                            gt_at_car_cross_track,
+                            gt_left_lane_line_x,
+                            gt_right_lane_line_x,
+                            gt_lane_boundary_margin,
+                            gt_lane_boundary_fallback_half_width,
                         )
                         gt_boundary_offroad = (
                             gt_boundary_offroad_left or gt_boundary_offroad_right
@@ -9615,10 +9681,15 @@ class AVStack:
                                f"(Unity still running, perception processing stopped)")
                     self.emergency_stop_type = 'perception_failed'
                 elif gt_offroad_type is not None:
+                    _hw = gt_estop_details.get('half_width_m')
+                    _ac = gt_estop_details.get('at_car_cross_track_m')
                     logger.error(
                         f"[Frame {self.frame_count}] EMERGENCY STOP: GT lane-boundary offroad "
-                        f"(left_x={gt_left_lane_line_x:.3f}m, right_x={gt_right_lane_line_x:.3f}m, "
-                        f"margin={gt_lane_boundary_margin:.3f}m, type={gt_offroad_type})"
+                        f"(frame={gt_lane_boundary_frame}, at_car_cross_track="
+                        f"{_ac if _ac is None else f'{_ac:.3f}m'}, half_width="
+                        f"{_hw if _hw is None else f'{_hw:.3f}m'}, lookahead left_x={gt_left_lane_line_x:.3f}m, "
+                        f"right_x={gt_right_lane_line_x:.3f}m, margin={gt_lane_boundary_margin:.3f}m, "
+                        f"type={gt_offroad_type})"
                     )
                     self.emergency_stop_type = gt_offroad_type
                 else:

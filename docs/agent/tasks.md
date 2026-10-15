@@ -6,6 +6,46 @@
 
 ## Queued — pick up next
 
+### T-SAFETY-ESTOP-FRAME — the GT lane-boundary e-stop tests a LOOKAHEAD quantity against an at-car margin (2026-10-15, FIX LANDED, live A/B in progress)
+
+**Found by the /plan-feature mechanism-verification gate while planning a regime-blend architecture for the
+tight-curve floor — and it overturned that plan.** With the LMPC routed to s_loop/hairpin, every run "left the
+lane" (OOL 5/5) and the score collapsed to ~29. But the at-car cross-track never exceeded 0.73 m in any of the
+twelve runs. Each "OOL" was ONE GT lane-boundary emergency stop per run, at the same geometric spot, with the car
+0.2–0.4 m INSIDE the lane at the car (hairpin at-car −0.2, left line +0.10; s_loop at-car −0.35, left line +0.10).
+
+**Root cause (Unity source):** `AVBridge.cs` computes `groundTruthLeft/RightLaneLineX` via
+`GetLanePositionsAtLookahead(lookaheadDistance)` — 6–8 m ahead, for perception/visualizer alignment. The e-stop
+(`orchestrator.py`, `emergency_stop_use_gt_lane_boundaries`) tested those lookahead positions against the
+at-car-scale 0.05 m margin. On R15/R40 the lane 6 m ahead is displaced ~½·Ld²·κ plus heading = 1.2–1.9 m, so a
+centred car reads the left line at +0.1 m → "gt_left_offroad". On gentle curves the displacement is negligible,
+which is why it never fired before. Pure Pursuit escaped it only because it runs WIDE on tight curves. **The better
+controller was being killed by a frame-mismatched safety check.** Third instance of the metric-frame defect class
+(T-METRIC-LATERAL-ERROR-FRAME 09-28, T-ACC-RADAR-FRAME 09-23) — now in the safety layer.
+
+**Fix (kill-switched, default on):** `gt_lane_boundary_offroad()` (pure, tested) + `safety.emergency_stop_gt_lane_
+boundary_frame: at_car` — tests the car's own cross-track (`groundTruthSelectedLaneCrossTrackRoadFrameAtCar`, the
+scorer's truth) against the lane half-width taken from the lookahead line SPACING (right − left = 3.6 m, which
+stays correct when the offsets are displaced; fallback `emergency_stop_lane_half_width_m` 1.8). `lookahead` =
+legacy. `tests/test_gt_lane_boundary_estop_frame.py` (19) pins the recorded false-fire vectors: at_car must NOT
+fire, legacy must, a genuine 1.85 m departure must, PP's 1.37 m wide run must not. The e-stop log line now prints
+both frames.
+
+**Consequence for Blocker 2 (tight curves) — the e-stop fix UNMASKED the real answer (clean A/B 2026-10-15 01:05).**
+The false early e-stop had been masking a genuine LMPC under-steer. With the at-car e-stop (car runs the full curve),
+PP vs LMPC-on-tight: hairpin PP 49.3 / Traj 50 / Saf 100 / OOL 0 vs LMPC 29.3 / Traj 50 / Saf 30 / OOL 5 / max 2.15 m;
+s_loop PP 91.1 / Traj 82 / Saf 100 / OOL 0 vs LMPC 80.5 / Traj 73 / Saf 74 / OOL 8 / max 0.80 m. The LMPC tracks the
+sustained arc marginally better (tightRMS hairpin 0.76 vs 0.98, s_loop 0.28 vs 0.37) but UNDER-STEERS and leaves the
+lane at exits/reversals — the small-angle QP is invalid once heading error exceeds ~0.3 rad (R15 hits 1.0 rad).
+**PP is genuinely the best controller we have for the tight tracks; the production boundary routing >0.015 to PP is
+correct.** My earlier "0.072 arc tracking / stays in lane" readings were BOTH artifacts of the false e-stop
+truncating runs. The regime-blend architecture is withdrawn — not because the LMPC stays in lane, but because the
+LMPC is WORSE than PP there. Blocker 2 is a REAL PP ceiling: either formalize s_loop (Traj 82) and hairpin (Traj 50)
+as accepted floors with this evidence (they are already in GOLDEN_BELOW_FLOOR), or research a genuinely better
+tight-curve controller (large-angle / pursuit-MPC hybrid) as a separate roadmap item. The steering chatter is moot
+(it was on runs that leave the lane anyway).
+
+
 ### T-ACC-H8-OVERLAY-DROP — the nightly re-seed launched ACC scenarios without their overlay (2026-10-12, FIXED)
 
 Night-61 H8 scored 80.9 (FAIL), reproduced twice, and looked like curvature-sign fallout. It was not: the fresh

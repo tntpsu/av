@@ -76,7 +76,23 @@ the LMPC track tight curves SMOOTHLY (comfort / stability / transition handling)
 them. The kinematic-harness over-promised the OVERALL outcome (same lesson as the margin) while being right
 about sustained-arc tracking.
 
-**Probe A (2026-10-15, damping tune) — REFUTED, fix level confirmed ARCHITECTURE.** With the LMPC on the tight
+**RESOLVED 2026-10-15 — Blocker 2 is a REAL PP ceiling; LMPC-on-tight is refuted on clean runs.** Fixing the
+e-stop frame (it false-fired on tight-curve lookahead displacement) let the car run the full curve and exposed the
+truth: the LMPC under-steers R15/R40, drifts off, and scores WORSE than PP (hairpin 29 vs 49, s_loop 80 vs 91; OOL
+5-8 vs 0). Both earlier LMPC readings were e-stop-truncation artifacts. PP is the best controller we have for the
+tight tracks and the production boundary is correct. To clear s_loop/hairpin Trajectory needs a genuinely better
+tight-curve controller (large-angle, since the LMPC's small-angle QP breaks at heading error >0.3 rad) OR
+formalizing the floors with this evidence. The regime-blend plan is dropped. See the ORIGINAL (now-superseded) pivot
+note below for the e-stop-bug detail.
+
+**PIVOT 2026-10-15 (superseded by the clean A/B above) — the e-stop was false-firing (T-SAFETY-ESTOP-FRAME).** The /plan-feature
+mechanism-verification gate showed the LMPC never left the lane on the tight tracks (max at-car 0.73 m); every
+"OOL" was one false GT lane-boundary e-stop per run, because the e-stop tested Unity's LOOKAHEAD lane-line
+positions (displaced 1.2–1.9 m on R15/R40) against an at-car margin. Pure Pursuit escaped it only by running wide.
+Fixed (at-car frame, kill-switched). The regime-blend architecture is WITHDRAWN; the remaining tight-curve issue
+is the secondary steering chatter. Probe A's "refutation" below stands only for the chatter, not the OOL.
+
+**Probe A (2026-10-15, damping tune) — refuted for the CHATTER; the OOL it could not touch was the false e-stop.** With the LMPC on the tight
 tracks, `mpc_r_steer_rate_kappa_gain` 0 → 30 (saturate raised to reach R15): s_loop chatter 12.4 → 12.7 rev/s
 (inert), OOL 5 → 5; hairpin chatter 15.1 → 12.7, Control 65 → 73, arc RMS 0.070 unchanged, but OOL 5 → 5 and
 overall ~29 both arms. **Every run leaves the lane regardless of damping.** The chatter is a secondary, partly

@@ -1059,5 +1059,28 @@
     "superseded_by": null,
     "resolved_by": "probe conclusive",
     "next": "Option B via /plan-feature: continuous regime blend into/out of tight curves (replace the binary mpc_max_map_curvature gate with a proportional PP<->LMPC handoff) so the LMPC arc tracking (0.07) is not undone by a discontinuous handoff; plus the tight-curve stability margin (sysid at 3-6 m/s). Dynamic bicycle model is NOT the lever (prior CFL failure on s_loop)."
+  },
+  {
+    "date": "2026-10-15",
+    "target_metric": "tight-curve OOL/Safety collapse when the LMPC runs s_loop/hairpin \u2014 ROOT CAUSE",
+    "target_track": "s_loop, hairpin_15",
+    "approach": "/plan-feature mechanism verification on the 12 LMPC-on-tight probe runs: localize the OOL frames, read at-car vs lane-line signals at the e-stop, trace the lane-line fields to Unity source.",
+    "fix_level": "REQUIREMENTS / measurement frame (safety e-stop) \u2014 kill-switched fix landed; live A/B in progress",
+    "hypothesis": "The \"out-of-lane\" is a real LMPC failure needing a regime-blend architecture. (PARTLY right: the OOL on the RECORDED runs was a false e-stop, but with it fixed the LMPC genuinely drifts off.)",
+    "outcome": "MIXED",
+    "outcome_status": "RESOLVED",
+    "metric_before": 5,
+    "metric_after": 0,
+    "root_cause_of_failure": "metric_frame_mismatch",
+    "root_cause_detail": "TWO findings, both from fixing the measurement first. (1) The GT lane-boundary e-stop tested Unity LOOKAHEAD lane-line positions (6-8 m, GetLanePositionsAtLookahead, displaced 1.2-1.9 m on R15/R40) against an at-car 0.05 m margin -> it FALSE-fired at at-car -0.2 m on the recorded runs, stopping the car early. Real frame bug; fixed (gt_lane_boundary_offroad, at_car frame, 19 tests). (2) BUT the false early e-stop was MASKING a genuine LMPC under-steer: with the at-car e-stop, the car runs the full tight curve and the LMPC drifts off both tracks. CLEAN full-run A/B (PP vs LMPC-on-tight, at-car e-stop): hairpin PP 49.3/Traj50/Saf100/OOL0 vs LMPC 29.3/Traj50/Saf30/OOL5/max2.15; s_loop PP 91.1/Traj82/Saf100/OOL0 vs LMPC 80.5/Traj73/Saf74/OOL8/max0.80. LMPC tracks the sustained arc marginally better (tightRMS hairpin 0.76 vs 0.98, s_loop 0.28 vs 0.37) but under-steers and leaves the lane at the exits/reversals because the small-angle QP is invalid once heading error exceeds ~0.3 rad. My earlier \"LMPC tracks the arc at 0.072 / never leaves the lane\" readings were BOTH artifacts of the false e-stop truncating runs. Verdict: PP is the best available controller for the tight tracks; the production boundary (route >0.015 to PP) is correct; the tight-curve Traj floor is a REAL PP ceiling.",
+    "iterations_spent": 1,
+    "files_changed": [
+      "av_stack/orchestrator.py (gt_lane_boundary_offroad + e-stop wiring)",
+      "config/av_stack_config.yaml (safety.emergency_stop_gt_lane_boundary_frame at_car, lane_half_width 1.8)",
+      "tests/test_gt_lane_boundary_estop_frame.py"
+    ],
+    "superseded_by": null,
+    "resolved_by": "e-stop fix + clean A/B",
+    "next": "Blocker 2 is a genuine PP ceiling: no controller we have beats PP on R15/R40 (kinematic LMPC under-steers; dynamic model failed CFL). Options: (a) formalize s_loop/hairpin Traj as accepted floors with this evidence (GOLDEN_BELOW_FLOOR already lists them); (b) research a genuinely better tight-curve controller (large-angle / pursuit-MPC hybrid) \u2014 separate roadmap item. The e-stop frame fix is correct and production-neutral; keep it for correctness + clean future experiments (decision pending)."
   }
 ]
