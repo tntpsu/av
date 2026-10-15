@@ -435,5 +435,22 @@
     "prevention": "Speed-owner consolidation: one lateral budget replaces the stacked proxies; raise it on the regression ladder.",
     "detection_method": "A/B + six-track sweep",
     "detection_delay_iterations": 0
+  },
+  {
+    "date": "2026-10-15",
+    "commit_summary": "GT lane-boundary e-stop tests the at-car cross-track, not the lookahead lane position (96e6504)",
+    "issue": "The safety e-stop compared Unity lookahead lane-line positions (6-8 m ahead, displaced 1.2-1.9 m on tight curves) against an at-car 0.05 m margin, false-firing on R15/R40 when the car was centred; it masked the real LMPC tight-curve under-steer underneath.",
+    "deduction_eliminated": "removes false GT lane-boundary e-stops on tight-curve LMPC runs (Safety 30/74 restored to a correct basis); production-neutral on PP tracks",
+    "tracks_affected": [
+      "hairpin_15",
+      "s_loop",
+      "(any track routing tight curves off PP)"
+    ],
+    "root_cause": "Measurement-frame mismatch in the safety layer: a lookahead quantity tested against an at-car margin. Unity AVBridge.cs GetLanePositionsAtLookahead.",
+    "process_stage": "requirements",
+    "process_sub": "requirements/measurement-frame",
+    "prevention": "gt_lane_boundary_offroad() pure + 19-test contract on the recorded false-fire vectors; /plan-feature mechanism-verification gate caught it. Rule: any Unity groundTruth* field feeding a threshold must be checked for at-car vs lookahead frame (feedback_verify_metric_frame_before_tuning, instance 4).",
+    "detection_method": "/plan-feature mechanism verification (read signals at worst frames) + Unity C# source trace",
+    "detection_delay_iterations": 0
   }
 ]
