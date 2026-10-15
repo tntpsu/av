@@ -361,6 +361,14 @@ harness ranking, diff the plant before touching config.
 
 ## Fragile Areas
 
+- **`MPCController` instance attributes set in `__init__` must be guarded in `reset()` / `compute_steering()`** —
+  several unit tests (`test_leff_estimation`, others) build the controller via `MPCController.__new__(...)`,
+  bypassing `__init__`. A new attribute referenced in `reset()`/`compute_steering()` without a `getattr(self,
+  '_x', default)` guard raises `AttributeError` for those instances (caused the 2026-10-12 `_actuator_gated`
+  REAL_BREAK, commit 71c8530). After editing `__init__`/`reset`/`compute_steering`, run the FULL MPC + leff
+  suite (`pytest tests/test_mpc_*.py tests/test_leff_estimation.py`), not a targeted subset — the subset I ran
+  before 2d2404e missed it; the nightly full-suite caught it.
+
 - **`av_stack.py` lane gating** — `clamp_lane_center_and_width()`, `apply_lane_ema_gating()`, `blend_lane_pair_with_previous()` are deeply interdependent
 - **Curvature measurement** — errors cascade to speed planning AND steering
 - **Perception stale fallback** — multi-condition blending logic; can fail silently
