@@ -76,6 +76,14 @@ the LMPC track tight curves SMOOTHLY (comfort / stability / transition handling)
 them. The kinematic-harness over-promised the OVERALL outcome (same lesson as the margin) while being right
 about sustained-arc tracking.
 
+**Probe A (2026-10-15, damping tune) — REFUTED, fix level confirmed ARCHITECTURE.** With the LMPC on the tight
+tracks, `mpc_r_steer_rate_kappa_gain` 0 → 30 (saturate raised to reach R15): s_loop chatter 12.4 → 12.7 rev/s
+(inert), OOL 5 → 5; hairpin chatter 15.1 → 12.7, Control 65 → 73, arc RMS 0.070 unchanged, but OOL 5 → 5 and
+overall ~29 both arms. **Every run leaves the lane regardless of damping.** The chatter is a secondary, partly
+tunable symptom on a sustained arc; the dominant failure is the out-of-lane at the regime handoff/transitions,
+which no steering-rate penalty touches. This is design smell 1 (binary PP↔LMPC gate at `mpc_max_map_curvature`)
+— the LMPC tracks the arc at 0.07 and the discontinuous handoff throws the car out at entry/exit. → Option B.
+
 **Refined plan for Blocker 2 (2026-10-12 pm):**
 0. (done) Boundary extension alone — refuted: LMPC tracks the arc, collapses Control + leaves the lane.
 1. **Diagnose WHERE the LMPC fails on tight curves** (tomorrow): entry cold-start, the PP↔LMPC handoff/blend,

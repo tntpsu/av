@@ -1038,5 +1038,26 @@
     "superseded_by": null,
     "resolved_by": null,
     "next": "Diagnose WHERE the LMPC fails on tight curves (entry cold-start / PP-LMPC handoff / steady jerk). Try a tight-curve r_steer_rate / jerk / q_lat schedule or a smoother regime blend to recover Control+OOL while keeping Traj 85. If un-smoothable within comfort, the dynamic model or a formalized floor."
+  },
+  {
+    "date": "2026-10-15",
+    "target_metric": "tight-curve Control collapse + OOL when the LMPC runs s_loop/hairpin (probe A: can steering-rate damping tame it?)",
+    "target_track": "s_loop, hairpin_15",
+    "approach": "Boundary extended (mpc_max_map_curvature 0.08, LMPC on tight) + damping reach raised (r_steer_rate_kappa_saturate 0.07); A/B mpc_r_steer_rate_kappa_gain 0.0 vs 30.0, 5 pairs/track. Config restored after.",
+    "fix_level": "TUNING probe \u2014 REFUTED",
+    "hypothesis": "More curvature-scheduled steering-rate damping damps the high-frequency chatter and recovers Control/OOL while keeping the arc tracking.",
+    "outcome": "NO_IMPROVEMENT",
+    "outcome_status": "RESOLVED",
+    "metric_before": 5,
+    "metric_after": 5,
+    "root_cause_of_failure": "oscillation",
+    "root_cause_detail": "s_loop: damping INERT \u2014 chatter 12.4->12.7 rev/s, Control 65->68, OOL 5->5, overall 25->30 (both catastrophic vs PP 91). hairpin: damping modestly cuts chatter 15.1->12.7 and Control 65->73 on the sustained arc, arc RMS stays excellent 0.071->0.070, but OOL 5->5 and overall 28.8->28.9. Every run leaves the lane in both tracks regardless of damping. So the dominant failure is NOT the chatter (secondary, partly tunable on a sustained arc) but the out-of-lane at the regime handoff/transitions, which the steering-rate penalty cannot touch. Confirms the fix level is ARCHITECTURE: the binary PP<->LMPC gate (mpc_max_map_curvature, design smell 1) throws the car out at entry/exit even though the LMPC tracks the arc. The old warning on this knob (0.44 m offset) did not bite at gain 30 (bias ~-0.09/-0.02).",
+    "iterations_spent": 1,
+    "files_changed": [
+      "(none \u2014 probe only, config restored)"
+    ],
+    "superseded_by": null,
+    "resolved_by": "probe conclusive",
+    "next": "Option B via /plan-feature: continuous regime blend into/out of tight curves (replace the binary mpc_max_map_curvature gate with a proportional PP<->LMPC handoff) so the LMPC arc tracking (0.07) is not undone by a discontinuous handoff; plus the tight-curve stability margin (sysid at 3-6 m/s). Dynamic bicycle model is NOT the lever (prior CFL failure on s_loop)."
   }
 ]
