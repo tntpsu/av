@@ -1082,5 +1082,26 @@
     "superseded_by": null,
     "resolved_by": "e-stop fix + clean A/B",
     "next": "Blocker 2 is a genuine PP ceiling: no controller we have beats PP on R15/R40 (kinematic LMPC under-steers; dynamic model failed CFL). Options: (a) formalize s_loop/hairpin Traj as accepted floors with this evidence (GOLDEN_BELOW_FLOOR already lists them); (b) research a genuinely better tight-curve controller (large-angle / pursuit-MPC hybrid) \u2014 separate roadmap item. The e-stop frame fix is correct and production-neutral; keep it for correctness + clean future experiments (decision pending)."
+  },
+  {
+    "date": "2026-10-15",
+    "target_metric": "tight-curve controller research \u2014 Phase 0 re-baseline of the dynamic bicycle model on the clean stack",
+    "target_track": "s_loop, hairpin_15, mixed_radius",
+    "approach": "Dynamic model ON (mpc_dynamic_model_enabled) with steer_gain_ratio corrected to the measured 0.78 (config had 1.0; its documented blocker was exactly des/exp=0.78), tight curves routed to MPC (mpc_max_map_curvature 0.08), tire EKF off/nominal. 5 fresh runs/track vs the PP baseline. Config restored.",
+    "fix_level": "ARCHITECTURE (controller) \u2014 research Phase 0",
+    "hypothesis": "The dynamic model (historically 95 on s_loop) was blocked only by the 0.78 steering-gain mismatch I have now measured; correcting it + the clean e-stop makes it beat PP on tight curves.",
+    "outcome": "NO_IMPROVEMENT",
+    "outcome_status": "RESOLVED",
+    "metric_before": 91.1,
+    "metric_after": 73.7,
+    "root_cause_of_failure": "model_plant_mismatch",
+    "root_cause_detail": "Dynamic model worse than PP EVERYWHERE, at-car frame: s_loop 91.1->73.7 (Traj 82->71, OOL 0->8 at the R40 reversals \u2014 tracks the arc better, RMSE 0.37->0.275, but leaves the lane); hairpin 49.3->28.9 (RMSE 0.97->1.80, OOL 4, breaks down at R15 large heading); mixed_radius 98.3->33.7 (RMSE 2.49, drifts to 3.3 m \u2014 CATASTROPHIC on a gentle R200 the kinematic LMPC handles at 98). The historical \"95 on s_loop\" was lookahead-frame inflation (pre-09-28 at-car switch). Steering-gain fix (0.78) was necessary but nowhere near sufficient. Caveat: tire EKF was off (nominal params), but a model that destroys R200 is not viable. Combined with the kinematic-LMPC result, the entire optimization-MPC family is refuted for the tight-curve floor: they track the sustained arc better than PP but fail the reversals/exits, while PP survives the transitions and only apex-cuts.",
+    "iterations_spent": 1,
+    "files_changed": [
+      "(none \u2014 research re-baseline, config restored)"
+    ],
+    "superseded_by": null,
+    "resolved_by": "Phase 0 conclusive",
+    "next": "Phase 1: Stanley controller extended to the 3-5 m/s tight-curve band (currently capped at 2 m/s) \u2014 the one untried, differently-shaped law (geometric + explicit heading term, PP-like transition robustness with less apex-cutting; built for tight large-heading maneuvers). Alternate: curvature-adaptive PP lookahead to reduce apex-cutting while keeping PP transition robustness. If both lose to PP, formalize the s_loop/hairpin floors."
   }
 ]

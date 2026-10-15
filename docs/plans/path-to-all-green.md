@@ -76,6 +76,13 @@ the LMPC track tight curves SMOOTHLY (comfort / stability / transition handling)
 them. The kinematic-harness over-promised the OVERALL outcome (same lesson as the margin) while being right
 about sustained-arc tracking.
 
+**RESEARCH Phase 0 (2026-10-15) — dynamic bicycle model REFUTED.** Re-baselined with the measured 0.78 steering
+gain (its documented blocker) on the clean stack: worse than PP everywhere (s_loop 91->74, hairpin 49->29,
+mixed 98->34 CATASTROPHIC). The "95 on s_loop" was lookahead-frame inflation. The whole optimization-MPC family
+(kinematic + dynamic) is refuted for tight curves — they track the arc better but fail the reversals/exits.
+Research Phase 1 = Stanley extended to 3-5 m/s (untried, geometric + heading law, PP-like transition robustness)
+and/or curvature-adaptive PP lookahead; if both lose to PP, formalize the floors.
+
 **RESOLVED 2026-10-15 — Blocker 2 is a REAL PP ceiling; LMPC-on-tight is refuted on clean runs.** Fixing the
 e-stop frame (it false-fired on tight-curve lookahead displacement) let the car run the full curve and exposed the
 truth: the LMPC under-steers R15/R40, drifts off, and scores WORSE than PP (hairpin 29 vs 49, s_loop 80 vs 91; OOL
