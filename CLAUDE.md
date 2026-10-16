@@ -86,9 +86,14 @@ work on a missing `TESTS.md`.
 
 ## Active Control Configuration
 
-- **Lateral mode:** Pure Pursuit (not PID, not Stanley, not MPC)
+- **Lateral mode:** LMPC default; **Stanley on tight curves** (map κ ≥ 0.015, PROMOTED 2026-10-16, option B); Pure Pursuit is the solver-failure fallback only; low-speed Stanley < 2 m/s
 - **PID pipeline:** Bypassed in PP mode (S1-M35)
 - **Target speed:** 12.0 m/s
+- **Tight-curve lateral (PROMOTED 2026-10-16, option B):** classical Stanley takes PP's slot on map κ ≥ 0.015 at all speeds ≤ 20 m/s
+  (`control.regime.stanley_tight_curve_routing`); its law fixes live under `control.lateral.stanley_*` (source-aware
+  sign, `radians` units, `gt_path_tangent` heading, `map_horizon` FF with 0.35 s lag-preview, plant gain 0.78). See architecture.md
+  "Stanley tight-curve controller". Two signed curvatures coexist in `reference_point`: `['curvature']` is **+right**,
+  `['curvature_horizon_signed']` is **+left** (T-LATERAL-DUAL-CURVATURE-SIGN) — say which one you mean.
 - **LMPC curvature sign:** `trajectory.mpc.mpc_curvature_sign: -1.0` since 2026-10-11 (applied inside `MPCController` for the camera-frame AND inter-frame writers; 1.0 = the legacy wrong-way feedforward, kill-switch). See the Lateral Sign Contract protocol below.
 - **Perception:** Segmentation model active but needs retraining (current checkpoint mislabels car hood as lane). Retraining pipeline ready: `./tools/segmentation/train_pipeline.sh`. See `training/TRAINING_GUIDE.md`.
 
@@ -209,6 +214,15 @@ highway_65 and sweeping_highway are at 100. On 2026-10-11 numbers, 1 of 6 tracks
 **Never compare an overall score or an ACC composite across the 2026-10-10/11 boundary**;
 the kill-switches are the `ACC_SCORE_*` / `OVERALL_CRITICAL_CAP_MODE` constants in
 `tools/scoring_registry.py`.
+
+**Out-of-lane and heading frames (2026-10-15):** `scoring_registry.OUT_OF_LANE_GT_FRAME = "at_car"` — the GT lane-line
+fields (`ground_truth/left|right_lane_line_x`) are computed at the LOOKAHEAD and sit ~½·Ld²·κ inside on a tight curve
+(1.17 m on hairpin_15), so the legacy "car between the lines" test flagged a CENTRED car and passed a wide one; the
+scorer now tests the car's road-frame cross-track against the half-width from the line spacing. `TRAJECTORY_HEADING_SOURCE
+= "gt_path_tangent"` — the heading penalty scored `control/heading_error` (PP's pursuit angle, ~atan(Ld·κ) by geometry:
+17.98° on hairpin vs a true 2.95°, a flat −20) and now scores `vehicle/heading_delta_deg`. Goldens unchanged by both
+(PP's true heading sits below the 10° floor; PP never left the at-car lane). Fifth and sixth metric-frame defects —
+when a deduction appears on a run whose at-car error is small, check the FRAME of the field the detector reads first.
 
 | Metric | Target |
 |---|---|

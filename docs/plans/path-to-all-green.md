@@ -76,6 +76,28 @@ the LMPC track tight curves SMOOTHLY (comfort / stability / transition handling)
 them. The kinematic-harness over-promised the OVERALL outcome (same lesson as the margin) while being right
 about sustained-arc tracking.
 
+**SIX-TRACK REGRESSION (2026-10-15 23:14, corrected scorer) — 5/6 at or above baseline.** hairpin_15 50.2→**97.8**
+(all layers ≥95 except one at 93.8, see journal #57), s_loop 89.0→93.6 (Traj 94.4→95.9 with FF gain 0.78; blocked only by the
+SpeedCompliance speed-owner floor 48.5), highway =, sweeping +0.8, hill +1.8. mixed_radius 98.3→84.0 is NOT Stanley: 3/5 runs
+carry the known LMPC R200 weave and the R40 approach hands PP the car at 11.6 m/s (production routing) where it saturates
+and diverges before the 9 m/s Stanley cap; fix = tight cap 20 (Stanley replaces PP on tight curves at all speeds) — final
+candidate running with a same-night production control. Blocker 2 (tight-curve floor) is effectively RESOLVED by design.
+
+**RESEARCH Phases 1b–1e (2026-10-15) — Stanley fully diagnosed; promotable.** True-heading source alone regressed
+(lost the pursuit angle's anticipation — Smell 7); the real residual was the FF reading the +RIGHT `reference_point['curvature']`
+with a +LEFT formula (FF steered OUT of the curve on every prior Stanley trial). Fixed FF source (map horizon) + plant gain
+0.78: s_loop overall 94.2 / Traj 95.4 / Control 100 / RMSE 0.082; hairpin 92.4 / RMSE 0.089 / Control 100 (after the scorer
+out-of-lane frame fix). Two scorer frame defects fixed (OOL lookahead lines; heading penalty = pursuit angle). Promotable
+routing `stanley_tight_curve_routing` (Stanley in PP's κ≥0.015 slot) in six-track ×5 regression; s_loop 92.8 (bl 89.0),
+hairpin 91.6 (bl 50.2) so far, all layers ≥95 except Trajectory (heading-penalty fix staged) and SpeedCompliance (design floor).
+
+**RESEARCH Phase 1 (2026-10-15) — classical Stanley WINS on both tight tracks.** Three Stanley defects fixed behind
+kill-switches (cross-track sign inverted for the road_frame_at_car source; radian command passed as normalized ≈0.37×;
+wrapper never read control.lateral.stanley_* from full_config). Routed to the whole run below 9 m/s with FF on:
+s_loop Traj 81.9→92.4 (RMSE 0.37→0.15), hairpin overall 49.3→87.2 / Traj 50.1→73.7 (RMSE 0.97→0.28), OOL 0 both,
+Control the residual (heading term = PP pursuit angle, contains cross-track, fights the cross-track term → 0.4 Hz
+weave). Phase 1b = gt_path_tangent heading source. Then routing design + 6-track regression before promotion.
+
 **RESEARCH Phase 0 (2026-10-15) — dynamic bicycle model REFUTED.** Re-baselined with the measured 0.78 steering
 gain (its documented blocker) on the clean stack: worse than PP everywhere (s_loop 91->74, hairpin 49->29,
 mixed 98->34 CATASTROPHIC). The "95 on s_loop" was lookahead-frame inflation. The whole optimization-MPC family

@@ -1,7 +1,55 @@
 # AV Stack — Agent Memory: Current State
 
-**Last updated:** 2026-10-12
+**Last updated:** 2026-10-15 (tight-curve research: Stanley promotion pending regression)
 **Current milestone:** S2-M1 — **1 of 6 tracks meets the all-layers-≥95 bar (highway_65) as of 2026-10-11**, after the scorer started measuring at-car lateral error (09-28), the real clock (10-05) and speed compliance (10-11). The "5 of 5" of early October was the lookahead frame and a scorer with no task-completion term. ACC emergency brake authority restored on G2 (885 → 2 e-stops, 99.8% reduction) via plan `acc-idm-accel-plumbing.md`. Frenet-frame MPC reference remains in shadow-mode.
+
+
+## Tight-curve controller research — 2026-10-15 (funded; Phases 0–1e complete, regression running)
+
+**Headline:** classical Stanley, correctly wired and routed into Pure Pursuit's tight-curve slot, lifts
+s_loop Trajectory 82 → 91–95 and hairpin_15 overall 49 → 92 (at-car RMSE 0.37 → 0.08–0.11 m and 0.97 → 0.09 m),
+Control 100 on both, zero lane departures. Journal #51–#55. Promotion pending the six-track ×5 regression.
+
+**What was refuted (clean negatives, journal #51):** the dynamic bicycle model (worse than PP everywhere; its "95 on
+s_loop" was lookahead-frame inflation) — with the kinematic LMPC result this closes the optimization-MPC family for
+tight curves (tracks the arc, fails the reversals). Also refuted on the way: FF plant gain "hurting" (it was the
+inverted FF), the heading-field frame (at-car, fine), FF curvature magnitude (exact), handoffs (14 launch frames only).
+
+**Defects found and fixed, all kill-switched, legacy defaults bit-exact (see architecture.md "Stanley tight-curve"):**
+1. Stanley cross-track sign inverted for the `road_frame_at_car` source (corr −1.000 vs the lane-centre convention
+   the code assumed). 2. Stanley radian command passed as a normalized value (≈0.37× gain; FF non-physical).
+3. `VehicleController(full_config=…)` never read `control.lateral.stanley_*` (harness arms were bit-identical).
+4. Stanley FF read `reference_point['curvature']`, which is **+right**; the formula and the map horizon are **+left**
+   → FF steered OUT of every curve (explains the YAML-noted "FF no gain" A/B). 5. Scorer out-of-lane used the
+   LOOKAHEAD lane-line fields (−25 Safety on a centred car; `OUT_OF_LANE_GT_FRAME`). 6. Scorer Trajectory heading
+   penalty scored PP's pursuit angle (flat −20 on hairpin; `TRAJECTORY_HEADING_SOURCE`). Goldens unchanged by 5 and 6.
+
+**Open:** T-LATERAL-DUAL-CURVATURE-SIGN (the LMPC takes +right kappa_ref and +left kappa_horizon through one sign
+switch — likely behind the "FF points out of every arc" xfail); hairpin Trajectory ≥95 needs the heading-source scorer
+fix applied (staged); SpeedCompliance floors (s_loop 48, hill 40) remain the speed-owner design item.
+
+
+**Six-track ×5 regression, 2026-10-15 23:14 (κ-routing, FF gain 1.0, tight cap 9; scored with both scorer frame fixes):**
+
+| track | baseline | candidate | layers < 95 | Stanley frames |
+|---|---|---|---|---|
+| s_loop | 89.0 | 93.6 | SpeedCompliance 48.5 (speed-owner floor); Traj 94.4 → 95.9 with FF gain 0.78 | 98 % |
+| hairpin_15 | 50.2 | **97.8** | Perception 94.0 — perception-stability flag (lane-estimate jumps) on the CENTRED R15 line; PP's wide line scores 100. Perception-layer item (segmentation retraining), not control | 98 % |
+| mixed_radius | 98.3 | 84.0 | bimodal — LMPC R200 weave 3/5 + PP at 11.6 m/s on the R40 approach (journal #56); not Stanley | 8 % |
+| highway_65 | 99.6 | 99.6 | — | 3 % |
+| sweeping_highway | 98.5 | 99.3 | — | 3 % |
+| hill_highway | 94.8 | 96.6 | Control 89.7 (pre-existing budget oscillation), SC 85.7 | 3 % |
+
+**Final candidate ×5 (gain 0.78, tight cap 20 — Stanley replaces PP on tight curves at every speed):** s_loop 94.3 /
+Traj 95.9 / RMSE 0.083; hairpin 97.5 / Traj 93.3 / RMSE 0.135 (gain 1.0 gives 97.8 / 95.2 / 0.095 — the FF gain is
+speed-dependent, T-STANLEY-FF-SPEED-MAP); **mixed 97.8** vs the same-night production control **93.0** (baseline 98.3;
+the LMPC R200 weave is production-side, 3/5 both arms) — Stanley holds the R40 approach at 5.8–11.8 m/s to 0.17–0.24 m
+where PP diverged to 1.05. Promotion options: A) cap 20 + gain 1.0 — mixed 96.5 / s_loop 93.6 / hairpin 97.8; B) cap 20 + gain 0.78 — mixed 97.8 / s_loop 94.3 / hairpin 97.5. **Recommend B** (wins 2/3 and the total; 0.78 is the measured delivery ratio for the 5–11 m/s band); T-STANLEY-FF-SPEED-MAP next. **PROMOTED 2026-10-16 (option B, user decision).** Production now runs the corrected Stanley law on tight curves at all
+speeds; the legacy values remain as kill-switch positions. Both scorer registry frames are active (goldens unchanged).
+
+**Harness lesson:** the kinematic plant is invalid at R15 for EVERY controller (PP diverges 49 m) and emits both
+curvature fields from one path — it found the sign/units/forwarding defects in its calibrated regime and could not see
+the two convention defects; Unity was the verdict on every tight-curve claim tonight.
 
 ## 2026-10-12 — LMPC speed margin RESOLVED: speed-gated actuator model (commit 2d2404e)
 

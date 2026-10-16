@@ -477,3 +477,38 @@ Distance/Time ─► local_gate_weight (smoothstep, lag-free, 0→1)
 3. Check `floorRescueMax` — if > 1.0m, the PP floor is doing heavy lifting (planner-side contraction insufficient)
 4. Check `preLdStepMin` — if large negative, lookahead is collapsing abruptly (slew or guard issue)
 5. Check `entrySevP50` — if < 0.3, severity scaling isn't applying (curvature too gentle for severity threshold)
+
+## Stanley tight-curve controller (2026-10-15, tight-curve research)
+
+**Why:** every optimization-MPC variant (kinematic, dynamic/expm) tracks a tight arc but fails the reversals/exits
+and leaves the lane on s_loop (R40) and hairpin_15 (R15); Pure Pursuit survives the transitions but apex-cuts
+(at-car RMSE 0.37 / 0.97 m). Classical Stanley — geometric, with an explicit heading term — is the transition-robust
+law that also tracks. It was already in the codebase as a <2 m/s parking controller, inhibited on curves.
+
+**Law (control/pid_controller.py, `compute_stanley_from_errors`):** `δ = w·ψ_e + atan(k·e / max(v_soft, v)) − atan(L·κ_ff)`,
+then normalized by 30° like PP (`stanley_output_units: radians`) and CLIPPED to ±max_steering. Inputs, each a
+kill-switched defect fix found 2026-10-15 (legacy defaults are bit-exact with the old parking path):
+- `e` = `gt_cross_track_m`, the CAR's road-frame offset (+right). The call site assumed the lane-centre convention
+  (its exact negative, corr −1.000) → `stanley_cross_track_source_aware: true` negates the `road_frame_at_car` source.
+- `ψ_e` = `−headingDeltaDeg` (`stanley_heading_source: gt_path_tangent`). The legacy source, PP's `heading_error`,
+  is the pursuit angle to the lookahead point and CONTAINS cross-track (corr +0.59/+0.82 with the offset): the two
+  terms fought (corr −0.5…−0.83) → 0.4 Hz weave; but it also carried the anticipation, so it can only be dropped
+  together with the next two items (Smell 7 lesson, journal #53).
+- `κ_ff` from the **map horizon** (`stanley_ff_curvature_source: map_horizon`), interpolated `v·τ` ahead
+  (`stanley_ff_preview_tau_s: 0.35` = actuator τ 0.25 s + 2 frames; the S-reversal excursion sat exactly one lag
+  ahead). The horizon is **+left** (track-profile `direction_sign`); `reference_point['curvature']` is **+right**
+  (sign from the reference heading) — the formula is written for +left, so the legacy source steered OUT of every
+  curve (journal #54). `stanley_ff_plant_gain: 0.78` divides the FF by the measured steering delivery ratio (closed-loop sysid 2026-10-11); it looked harmful only while the FF was inverted. The lag-preview is neutral at s_loop speed.
+- `VehicleController(full_config=…)` now resolves all `stanley_*` law keys from `control.lateral` (they were
+  constructor defaults on that path → harness A/B arms were bit-identical).
+
+**Routing (control/regime_selector.py):** `stanley_tight_curve_routing: true` makes Stanley take exactly the slot PP
+held — the LMPC curvature ceiling (`map κ ≥ mpc_max_map_curvature`, preview-fed) while `v ≤ stanley_tight_curve_max_speed_mps`
+(9.0). Low-speed Stanley (<2 m/s, curve-inhibited), LMPC default and NMPC guards are untouched.
+
+**Results (at-car frame, 2026-10-15):** s_loop Traj 81.9 → 95.4, Control 100, RMSE 0.37 → 0.082 m; hairpin overall
+49.3 → 92.4 (scorer frame fixed), RMSE 0.97 → 0.089 m, Control 100, OOL 0 both. Tests:
+`tests/test_stanley_tight_curve_contract.py`, `tests/test_regime_selector_stanley_tight.py`.
+**Open:** T-LATERAL-DUAL-CURVATURE-SIGN — the LMPC takes `kappa_ref` (+right) and `kappa_horizon` (+left) through ONE
+sign switch. **Harness limit:** `tests/test_lateral_sign_contract.py`'s plant is invalid at R15 for every controller
+(PP diverges 49 m) and emits both curvature fields from one path — Unity is the verdict on tight curves.

@@ -1,6 +1,6 @@
 # AV Stack — Agent Memory: Tasks
 
-**Last updated:** 2026-10-12
+**Last updated:** 2026-10-15 (tight-curve research complete; Stanley promotion pending)
 
 ---
 
@@ -1635,6 +1635,40 @@ Car now reaches 25 m/s (11.7% overspeed rate at target=25). Speed RMSE 5.3 m/s =
 **Workstream C2 DEFERRED:** PP floor rescue (~1.7m) is structural arc-chord geometry on R40. Low ROI. Only revisit if mixed_radius/sweeping_highway exhibit actual gate failures.
 
 ---
+
+
+### T-STANLEY-FF-SPEED-MAP — Stanley feedforward normalized by the speed-dependent steer map (2026-10-15)
+**Found in the final ×5 (journal #58).** A constant FF plant gain cannot be right at two speeds: 0.78 helps s_loop at
+5.3 m/s (at-car RMSE 0.112→0.083, Traj 94.4→95.9) and hurts hairpin_15 at 4 m/s (0.095→0.135, Traj 95.2→93.3).
+Mechanism: Unity's maximum steer angle is speed-dependent (harness `max_steer_map`: 0.5236 rad @ 0 m/s → 0.2793 @ 12)
+while `compute_stanley_from_errors` normalizes the radian command by a fixed 30°. **To do:** normalize the FF (and
+ideally the whole Stanley command) by `max_steer_map(v)` × the measured plant gain instead of `STANLEY_MAX_STEER_RAD`
+— kill-switched, A/B on s_loop + hairpin (+ mixed R40 at 8–11 m/s). Expected: both tight tracks ≥95 Trajectory.
+Pure Pursuit has the same fixed-30° normalization (`max_steering_rad = np.radians(30.0)`), which is why PP's own
+delivery ratio read 0.78 at 11–13 m/s on R200 — the same mechanism seen from the LMPC side (project_lmpc_speed_margin_r200).
+
+### T-LATERAL-STANLEY-PROMOTION — PROMOTED 2026-10-16 (option B)
+Research complete (journal #51–#58). Candidate: `control.regime.stanley_tight_curve_routing: true`,
+`stanley_tight_curve_max_speed_mps: 20.0`; `control.lateral`: `stanley_cross_track_source_aware: true`,
+`stanley_output_units: radians`, `stanley_curvature_ff_enabled: true`, `stanley_ff_curvature_source: map_horizon`,
+`stanley_heading_source: gt_path_tangent`, `stanley_ff_preview_tau_s: 0.35` (neutral), `stanley_ff_plant_gain: 0.78`
+(option B, recommended; 1.0 = option A: mixed 96.5 vs 97.8, s_loop 93.6 vs 94.3, hairpin 97.8 vs 97.5). Six-track ×5 regression: 5/6 ≥ baseline; mixed_radius's drop is the production-side LMPC
+R200 weave (3/5 in the same-night control) plus a corner-entry handoff removed by cap 20. Open items that remain
+after promotion: SpeedCompliance floors (s_loop/hill, speed owner), hill Control oscillation, hairpin Perception 94.0,
+T-LATERAL-DUAL-CURVATURE-SIGN, T-STANLEY-FF-SPEED-MAP, LMPC R200 weave rate (nightly watch).
+
+### T-LATERAL-DUAL-CURVATURE-SIGN — two signed curvatures, opposite conventions, one sign switch (2026-10-15)
+**Found during the tight-curve Stanley research (journal #54).** `reference_point['curvature']` is **+right** (sign falls back
+to the reference heading; agrees 1.00 with `groundTruthPathCurvature`, itself +right — s_loop's first arc is `direction: right`
+with κ_GT > 0). `reference_point['curvature_horizon_signed']` is **+left** (track profile `direction_sign = -1 if "right"`).
+The LMPC feeds `kappa_ref` from the former and `kappa_horizon` from the latter and multiplies BOTH by `mpc_curvature_sign`
+(−1.0) — so one of its two curvature inputs is inverted relative to the other. `tests/test_lateral_sign_contract.py`'s plant
+emits both fields from ONE path and cannot see this; the harness header's "orchestrator +κ = left" is true of the horizon only.
+Stanley's FF had the same exposure and is fixed by `stanley_ff_curvature_source: map_horizon`. **To do:** (1) a contract test
+on recordings/config that `sign(reference_point_curvature) == sign(horizon[0])` on arcs (currently FAILS by construction);
+(2) decide the single orchestrator convention (+left, matching the LMPC's internal sign and the map) and convert
+`reference_point['curvature']` at its source; (3) re-run the LMPC strict-xfails (`test_zero_error_feedforward_points_into_the_left_arc`,
+regime-0 left-arc sign flip) — they may be this defect. Related: [[feedback_verify_metric_frame_before_tuning]] instance 5.
 
 ## Completed Since Last Update
 

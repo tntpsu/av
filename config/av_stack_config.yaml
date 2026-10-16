@@ -32,8 +32,24 @@ control:
     stanley_k: 1.5                 # base default; hairpin overlay sets 3.0 (validated 59→79)
     stanley_soft_speed: 2.0
     stanley_heading_weight: 1.0
-    stanley_curvature_ff_enabled: false  # A/B tested on hairpin: no RMSE gain, 2× steer_jerk. Dead end for reactive control.
+    stanley_curvature_ff_enabled: true   # PROMOTED 2026-10-16 (option B): map-horizon FF; the old "no gain" A/B ran an inverted FF
     stanley_ff_slew_rate_rad: 0.05       # Slew limiter for FF (rad/frame). Works mechanically, but FF itself is ineffective.
+    # Kill-switches, 2026-10-15 (tight-curve research Phase 1). Legacy defaults are bit-exact with production.
+    #   source_aware: negate the 'road_frame_at_car' source (the CAR's offset, +right) — Stanley's call site assumes
+    #   the lane-centre convention, the exact negative (corr −1.000); legacy false = inverted cross-track feedback.
+    #   output_units: 'radians' normalizes the law's radian sum by 30° like PP (legacy passed it through ×0.7 ≈ 0.37×).
+    stanley_cross_track_source_aware: true   # PROMOTED 2026-10-16
+    stanley_output_units: radians   # PROMOTED 2026-10-16 | normalized_legacy
+    #   heading_source: 'gt_path_tangent' feeds Stanley the path-tangent heading error (headingDeltaDeg) instead of PP's
+    #   pursuit angle, which contains cross-track (corr +0.59 with offset) and fights the cross-track term (0.4 Hz weave).
+    stanley_heading_source: gt_path_tangent   # PROMOTED 2026-10-16 | pp_heading_to_ref
+    #   ff_plant_gain: measured steering delivery ratio (sysid 2026-10-11: 0.78); FF = -atan(L·κ)/gain. 1.0 = legacy.
+    stanley_ff_plant_gain: 0.78   # PROMOTED 2026-10-16 (option B; right for 5–11 m/s; see T-STANLEY-FF-SPEED-MAP)
+    #   ff_preview_tau_s: evaluate the FF curvature v·τ ahead on the map horizon (measured plant lag 0.35 s). 0 = at-car.
+    stanley_ff_preview_tau_s: 0.35   # PROMOTED 2026-10-16 (measured plant lag; neutral at s_loop speed)
+    #   ff_curvature_source: 'map_horizon' (+left, matches the FF formula; preview via ff_preview_tau_s) |
+    #   'reference_point' (legacy; +RIGHT field → FF steers OUT of the curve — the 2026-10-15 finding).
+    stanley_ff_curvature_source: map_horizon   # PROMOTED 2026-10-16 | reference_point (+right field; inverts the FF)
     # PP residual PID (hill_highway oscillation mitigation): slightly lower feedback vs error loop.
     # 2026-03-22: 0.070 A/B vs 0.075 failed promotion (see GRADE_LATERAL_TUNING.md); keep 0.075 until a gated win.
     pp_feedback_gain: 0.075
@@ -430,6 +446,9 @@ control:
     # (brief speed dip during C-braking was tripping Stanley at v<4.5 m/s with κ≈0.01,
     # causing MPC→Stanley + perception dropout jerk).  0.0 disables this guard.
     stanley_inhibit_curvature_abs: 0.004
+    # Tight-curve routing (2026-10-15): Stanley takes PP's slot at map κ ≥ mpc_max_map_curvature while v ≤ cap.
+    stanley_tight_curve_routing: true   # PROMOTED 2026-10-16: Stanley takes PP's κ≥0.015 slot
+    stanley_tight_curve_max_speed_mps: 20.0   # PROMOTED 2026-10-16: all speeds (9.0 created an LMPC→PP→Stanley corner-entry handoff on mixed)
     # LMPC → NMPC upshift thresholds (Step 5)
     lmpc_max_speed_mps: 20.0           # above this + upshift_hysteresis → NONLINEAR_MPC
     lmpc_max_heading_error_rad: 0.25   # large heading error → NONLINEAR_MPC (LMPC linearisation breaks)
