@@ -46,6 +46,8 @@ from scoring_registry import (
     CATASTROPHIC_ERROR_M,
     MIN_CONSECUTIVE_OOL,
     GT_LANE_BOUNDARY_MAX_ABS_M,
+    OUT_OF_LANE_GT_FRAME,
+    OUT_OF_LANE_FALLBACK_HALF_WIDTH_M,
     CURVATURE_FLOOR_COEFF as _CURVATURE_FLOOR_COEFF,
     LATERAL_ERROR_SCORING_FRAME,
     LATERAL_ERROR_AT_CAR_FIELDS,
@@ -57,6 +59,7 @@ from scoring_registry import (
     SPEED_COMPLIANCE_LAYER_ENABLED,
     SPEED_COMPLIANCE_WEIGHT,
     HEADING_PENALTY_FLOOR_DEG,
+    TRAJECTORY_HEADING_SOURCE,
     ACC_COLLISION_GATE,
     ACC_TTC_CRITICAL_S,
     ACC_NEAR_MISS_GAP_M,
@@ -77,6 +80,41 @@ from scoring_registry import (
     PERCEPTION_BLIND_PENALTY_MAX,
     is_emergency_acc_state,
 )
+
+
+def scored_heading_rmse(source, controller_heading_error, heading_delta_deg):
+    """Heading RMSE (rad) the Trajectory heading penalty scores → (rmse, source_used). 'gt_path_tangent' uses
+    vehicle/heading_delta_deg (degrees; the car's heading vs the path tangent AT THE CAR); falls back to the legacy
+    controller signal when that field is absent. 'controller_heading_error' = legacy control/heading_error (PP's pursuit
+    angle to its lookahead point — geometry, not error, on tight curves)."""
+    if source == 'gt_path_tangent' and heading_delta_deg is not None and len(heading_delta_deg) > 0:
+        h = np.radians(np.asarray(heading_delta_deg, dtype=float))
+        h = h[np.isfinite(h)]
+        if h.size:
+            return float(np.sqrt(np.mean(h ** 2))), 'gt_path_tangent'
+    if controller_heading_error is not None and len(controller_heading_error) > 0:
+        return float(np.sqrt(np.mean(np.asarray(controller_heading_error, dtype=float) ** 2))), 'controller_heading_error'
+    return 0.0, 'none'
+
+
+def gt_out_of_lane_mask(frame, gt_left, gt_right, d_at_car, max_abs_m, fallback_half_m):
+    """GT out-of-lane mask → (mask, error_data, half_width_m). 'lookahead' = legacy: car (x=0) not between the Unity
+    lane-line fields, which are computed at the LOOKAHEAD and displaced ~½·Ld²·κ on tight curves (false positives on a
+    centred car). 'at_car': |road-frame cross-track of the car| > half-width from the line spacing (fallback when the
+    lines are missing/implausible). Falls back to legacy when the at-car truth is absent."""
+    gt_left = np.asarray(gt_left, dtype=float); gt_right = np.asarray(gt_right, dtype=float)
+    plausible = (np.abs(gt_left) < max_abs_m) & (np.abs(gt_right) < max_abs_m)
+    if frame == 'at_car' and d_at_car is not None:
+        d = np.asarray(d_at_car, dtype=float)
+        width = gt_right - gt_left
+        ok = plausible & np.isfinite(width) & (width >= 1.0) & (width <= 10.0)
+        half = float(np.median(width[ok]) / 2.0) if ok.any() else float(fallback_half_m)
+        excess = np.abs(d) - half
+        mask = np.isfinite(d) & (excess > 0.0)
+        return mask, np.where(mask, excess, 0.0), half
+    mask = ~((gt_left <= 0) & (0 <= gt_right)) & plausible
+    err = np.where(gt_left > 0, np.abs(gt_left), np.where(gt_right < 0, np.abs(gt_right), 0.0))
+    return mask, err, float(fallback_half_m)
 
 G_MPS2 = 9.80665
 LOW_VISIBILITY_STALE_REASONS = {"left_lane_low_visibility", "right_lane_low_visibility"}
@@ -7444,13 +7482,10 @@ def analyze_recording_summary(
         # (e.g., Unity mesh-seam artifacts at track wrap-around produce ±1500m values that
         # would otherwise be counted as real OOL events). Real lane boundaries are always
         # within ±GT_LANE_BOUNDARY_MAX_ABS_M of the vehicle.
-        gt_plausible = (np.abs(gt_left) < GT_LANE_BOUNDARY_MAX_ABS_M) & \
-                       (np.abs(gt_right) < GT_LANE_BOUNDARY_MAX_ABS_M)
-        out_of_lane_mask = ~((gt_left <= 0) & (0 <= gt_right)) & gt_plausible
-        error_data = np.where(
-            gt_left > 0,
-            np.abs(gt_left),
-            np.where(gt_right < 0, np.abs(gt_right), 0.0),
+        out_of_lane_mask, error_data, _ool_half_width_m = gt_out_of_lane_mask(
+            OUT_OF_LANE_GT_FRAME, gt_left, gt_right,
+            data.get('gt_selected_lane_cross_track_road_frame_at_car'),
+            GT_LANE_BOUNDARY_MAX_ABS_M, OUT_OF_LANE_FALLBACK_HALF_WIDTH_M,
         )
         error_source = "ground_truth_boundaries"
     elif data['gt_center'] is not None:
@@ -7597,6 +7632,8 @@ def analyze_recording_summary(
         lateral_error_adj_p95 = lateral_error_p95
     
     heading_error_rmse = safe_float(np.sqrt(np.mean(data['heading_error']**2)) if data['heading_error'] is not None and len(data['heading_error']) > 0 else 0.0)
+    heading_error_rmse_scored, heading_error_scored_source = scored_heading_rmse(
+        TRAJECTORY_HEADING_SOURCE, data.get('heading_error'), data.get('heading_delta_deg'))
     heading_error_max = safe_float(np.max(np.abs(data['heading_error'])) if data['heading_error'] is not None and len(data['heading_error']) > 0 else 0.0)
     
     # Time in Lane:
@@ -8297,9 +8334,11 @@ def analyze_recording_summary(
         # This means: car is OUT if (left > 0) OR (right < 0)
         # Plausibility filter: see the failure-frame detector above — rejects frames
         # where GT boundaries are physically implausible (simulator mesh-seam artifacts).
-        gt_plausible = (np.abs(gt_left) < GT_LANE_BOUNDARY_MAX_ABS_M) & \
-                       (np.abs(gt_right) < GT_LANE_BOUNDARY_MAX_ABS_M)
-        out_of_lane_mask = ~((gt_left <= 0) & (0 <= gt_right)) & gt_plausible
+        out_of_lane_mask, _ool_err_unused, _ool_half_width_m = gt_out_of_lane_mask(
+            OUT_OF_LANE_GT_FRAME, gt_left, gt_right,
+            data.get('gt_selected_lane_cross_track_road_frame_at_car'),
+            GT_LANE_BOUNDARY_MAX_ABS_M, OUT_OF_LANE_FALLBACK_HALF_WIDTH_M,
+        )
         # Use sustained out-of-lane mask to avoid single-frame noise
         min_consecutive_out = MIN_CONSECUTIVE_OOL
         sustained_mask = np.zeros_like(out_of_lane_mask, dtype=bool)
@@ -8668,7 +8707,7 @@ def analyze_recording_summary(
 
     trajectory_lateral_rmse_penalty = safe_float(min(30, lateral_error_adj_rmse * 50))
     trajectory_lateral_p95_penalty = safe_float(min(20, max(0.0, lateral_error_adj_p95 - LATERAL_P95_GATE_M) * 35.0))
-    trajectory_heading_penalty = safe_float(min(20, max(0.0, np.degrees(heading_error_rmse) - HEADING_PENALTY_FLOOR_DEG) * 2.5))
+    trajectory_heading_penalty = safe_float(min(20, max(0.0, np.degrees(heading_error_rmse_scored) - HEADING_PENALTY_FLOOR_DEG) * 2.5))
 
     # Penalty only above the pp_max_steering_jerk cap (STEERING_JERK_PENALTY_CAP normalized/s²).
     # Operating at-cap is in-spec; exceeding it signals a limiter failure.
@@ -11454,6 +11493,8 @@ def analyze_recording_summary(
             "lateral_error_at_car_rmse": lateral_error_at_car_rmse,
             "lateral_error_at_car_p95": lateral_error_at_car_p95,
             "heading_error_rmse": safe_float(heading_error_rmse),
+            "heading_error_rmse_scored": safe_float(heading_error_rmse_scored),
+            "heading_error_scored_source": heading_error_scored_source,
             "heading_error_max": safe_float(heading_error_max),
             "time_in_lane": safe_float(time_in_lane),
             "time_in_lane_centered": safe_float(time_in_lane_centered)

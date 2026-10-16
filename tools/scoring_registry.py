@@ -27,6 +27,13 @@ STEERING_JERK_GATE: float = 20.0       # norm/s² — steering jerk max (test ga
 OUT_OF_LANE_THRESHOLD_M: float = 0.5   # m     — lateral error beyond this = out of lane
 CATASTROPHIC_ERROR_M: float = 2.0       # m     — lateral error beyond this = catastrophic
 MIN_CONSECUTIVE_OOL: int = 10           # frames — sustained OOL event minimum duration
+# Frame for the GT out-of-lane test (2026-10-15, fifth metric-frame defect). Unity's left/right lane-line fields are
+# computed AT THE LOOKAHEAD (T-SAFETY-ESTOP-FRAME): on a tight curve they sit ~½·Ld²·κ inside (1.17 m on hairpin_15), so
+# the legacy "car at x=0 between the lines" test flagged a CENTRED car (at-car max 0.49 m in a 1.80 m half-lane) while a
+# car running wide the other way passed. "at_car" tests the car's road-frame cross-track against the half-width from the
+# line spacing (fallback OUT_OF_LANE_FALLBACK_HALF_WIDTH_M); "lookahead" is the legacy behaviour.
+OUT_OF_LANE_GT_FRAME: str = "at_car"        # "at_car" | "lookahead"
+OUT_OF_LANE_FALLBACK_HALF_WIDTH_M: float = 1.8
 GT_LANE_BOUNDARY_MAX_ABS_M: float = 20.0  # m — GT plausibility bound. Real lane boundaries
                                            #     are always within ±20m of the vehicle. Values
                                            #     beyond this (e.g., Unity mesh-seam artifacts
@@ -63,6 +70,12 @@ TIME_BASE_FIELDS: tuple = (
 )
 STEERING_JERK_PENALTY_CAP: float = 18.0 # norm/s² — penalty applied above this cap
 HEADING_PENALTY_FLOOR_DEG: float = 10.0 # degrees — heading RMSE penalty floor
+# Which heading the Trajectory heading penalty scores (2026-10-15, sixth metric-frame defect). Legacy
+# "controller_heading_error" = control/heading_error, Pure Pursuit's pursuit angle to its lookahead point — a
+# CONTROLLER-INTERNAL signal that is ~atan(Ld·κ) by geometry on a tight curve (hairpin_15 Stanley run: 17.98° while the
+# vehicle's true heading error was 2.95°) → a flat −20 on hairpin regardless of tracking, and a score that depends on
+# which controller runs. "gt_path_tangent" = vehicle/heading_delta_deg, the car's heading vs the path tangent at the car.
+TRAJECTORY_HEADING_SOURCE: str = "gt_path_tangent"   # "gt_path_tangent" | "controller_heading_error"
 
 # ── Layer score pass gate ────────────────────────────────────────────────────
 LAYER_SCORE_MIN_PASS: float = 95.0      # —  — every layer must score >= this to pass
