@@ -452,5 +452,70 @@
     "prevention": "gt_lane_boundary_offroad() pure + 19-test contract on the recorded false-fire vectors; /plan-feature mechanism-verification gate caught it. Rule: any Unity groundTruth* field feeding a threshold must be checked for at-car vs lookahead frame (feedback_verify_metric_frame_before_tuning, instance 4).",
     "detection_method": "/plan-feature mechanism verification (read signals at worst frames) + Unity C# source trace",
     "detection_delay_iterations": 0
+  },
+  {
+    "commit_summary": "7dc39b7 fix(control): Stanley cross-track sign inverted for the road_frame_at_car source; FF read the +right reference_point['curvature'] with a +left formula",
+    "issue": "Stanley's call site assumed the lane-centre convention for gt_cross_track_m while the first-priority source (since 09-28) is the car's road-frame offset, its exact negative (corr -1.000); and its curvature FF consumed reference_point['curvature'] (+right, sign from the reference heading) with -atan(L*kappa) written for the +left map horizon -> cross-track feedback and feedforward both inverted on tight curves.",
+    "deduction_eliminated": "s_loop Trajectory 82->96, hairpin overall 49->97.5 (with the routing); the FF sign alone moved s_loop from 57.8 to 93.1 in the attribution arms",
+    "tracks_affected": [
+      "s_loop",
+      "hairpin_15",
+      "mixed_radius"
+    ],
+    "root_cause": "Two signed-curvature fields and two cross-track fields coexist in one reference_point with opposite sign conventions; consumers encode a convention in a comment and a formula, and a later change of source priority (09-28) or field choice silently flips them.",
+    "process_stage": "design",
+    "process_sub": "design/signal-routing",
+    "prevention": "One orchestrator convention per physical quantity (+left kappa, car-offset +right), converted at the SOURCE; a contract test that sign(reference_point_curvature)==sign(horizon[0]) on arcs; name convention in the field name (\u2026_left_pos / \u2026_car_offset_right).",
+    "detection_method": "Unity A/B arms + recorded-field correlation (corr(lane_center_x_at_car, road_frame_at_car) = -1.000; more FF gain -> more under-steer)",
+    "detection_delay_iterations": 3,
+    "date": "2026-10-16"
+  },
+  {
+    "commit_summary": "7dc39b7 fix(control): Stanley radian command passed as a normalized value (~0.37x gain); VehicleController(full_config) never read control.lateral.stanley_*",
+    "issue": "compute_stanley_from_errors clipped its radian sum to +-1 and the call site multiplied by max_steering (0.7) -> ~0.37x the intended wheel angle and a non-physical FF; and the wrapper ignored the YAML law keys unless passed as kwargs, so every harness/test/replay ran constructor defaults (A/B arms bit-identical).",
+    "deduction_eliminated": "prerequisite for the tight-curve gains above; removed a class of false harness negatives",
+    "tracks_affected": [
+      "s_loop",
+      "hairpin_15"
+    ],
+    "root_cause": "Units not carried in names (a radian sum assigned to 'steering_normalized'); wrapper forwarding gap (Smell 6) on the full_config construction path.",
+    "process_stage": "implementation",
+    "process_sub": "implementation/wrong-formula",
+    "prevention": "Unit suffixes on controller outputs (_rad vs _norm); a forwarding test that reads back one law parameter from the constructed controller; harness rule: a variant that cannot change the output is not a variant.",
+    "detection_method": "harness probe (FF on == FF off bit-exact; cross-track term matched k=1.0 not YAML 1.5) + Unity",
+    "detection_delay_iterations": 1,
+    "date": "2026-10-16"
+  },
+  {
+    "commit_summary": "ebcc72c fix(scoring): out-of-lane detection used the lookahead-frame GT lane-line fields (OUT_OF_LANE_GT_FRAME=at_car)",
+    "issue": "Scorer declared out-of-lane when x=0 was not between ground_truth/left|right_lane_line_x, which Unity computes at the lookahead; on R15 they sit 1.17 m inside, so a centred car (at-car max 0.49 m) took -25 Safety per run while PP running 1.37 m wide passed.",
+    "deduction_eliminated": "hairpin Safety 74->100 on the Stanley runs; goldens unchanged",
+    "tracks_affected": [
+      "hairpin_15",
+      "s_loop"
+    ],
+    "root_cause": "Same lookahead-frame fields as the e-stop defect (T-SAFETY-ESTOP-FRAME); the scorer's safety detector was never audited for frame after the 09-28 at-car switch.",
+    "process_stage": "tooling",
+    "process_sub": "tooling/misleading-metric",
+    "prevention": "Frame lint: every scorer/safety detector reading a GT field must declare its frame; the 'better tracking -> more deductions' signature should trip an automatic frame check.",
+    "detection_method": "analyze_drive_overall deductions vs at-car max on the same run; line-centre vs at-car gap on arcs (1.17 m)",
+    "detection_delay_iterations": 0,
+    "date": "2026-10-16"
+  },
+  {
+    "commit_summary": "ebcc72c fix(scoring): Trajectory heading penalty scored PP's pursuit angle (TRAJECTORY_HEADING_SOURCE=gt_path_tangent)",
+    "issue": "trajectory_heading_penalty used control/heading_error, the pursuit angle to the lookahead point (~atan(Ld*kappa) by geometry: 17.98 deg on hairpin vs a true 2.95 deg) -> a flat -20 on hairpin regardless of tracking, and a score that depends on which controller runs.",
+    "deduction_eliminated": "hairpin Trajectory 76.6->95.2 on the Stanley runs; goldens unchanged (PP below the 10 deg floor)",
+    "tracks_affected": [
+      "hairpin_15",
+      "s_loop"
+    ],
+    "root_cause": "Scoring a controller-internal signal as a vehicle-state metric.",
+    "process_stage": "requirements",
+    "process_sub": "requirements/wrong-metric",
+    "prevention": "Scorer inputs must be vehicle/ground-truth state, never control/* internals; add to the scoring-registry review checklist.",
+    "detection_method": "layer total vs listed deductions mismatch (100-4.6 != 75.4) traced to the unlisted heading penalty",
+    "detection_delay_iterations": 0,
+    "date": "2026-10-16"
   }
 ]
