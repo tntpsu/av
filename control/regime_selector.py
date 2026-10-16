@@ -76,6 +76,10 @@ class RegimeConfig:
     # C2 while κ≈0.01), which combined with perception dropout caused large steering
     # jerk.  0.0 = disabled (legacy behaviour).  ~0.004–0.005 blocks R≤250 m curves.
     stanley_inhibit_curvature_abs: float = 0.004
+    # Tight-curve routing (2026-10-15 research): Stanley takes the slot PP holds today — the LMPC curvature ceiling
+    # (map κ ≥ mpc_max_map_curvature, with preview) — while below this speed. Kill-switch; False = legacy PP.
+    stanley_tight_curve_routing: bool = False
+    stanley_tight_curve_max_speed_mps: float = 9.0
 
     @classmethod
     def from_config(cls, cfg: dict) -> "RegimeConfig":
@@ -107,6 +111,7 @@ class RegimeConfig:
             "stanley_upshift_hysteresis_mps", "stanley_downshift_hysteresis_mps",
             "stanley_blend_frames", "stanley_min_hold_frames",
             "stanley_inhibit_curvature_abs",
+            "stanley_tight_curve_routing", "stanley_tight_curve_max_speed_mps",
             # Deprecated — still loaded if present for backward compat
             "pp_max_speed_mps", "upshift_hysteresis_mps", "downshift_hysteresis_mps",
             "mpc_min_speed_mps", "mpc_max_curvature", "mpc_curvature_hysteresis",
@@ -312,6 +317,11 @@ class RegimeSelector:
         # routes tight curves to PP instead of LMPC.
         lmpc_max_curv = self.config.mpc_max_map_curvature
         if lmpc_max_curv > 0.0 and map_curvature_abs >= lmpc_max_curv:
+            # 2026-10-15: classical Stanley (source-aware sign, physical units, true heading, plant-gain FF) beat PP
+            # on s_loop and hairpin_15 (journal #52+). Same boundary, same hold/blend → transition structure unchanged.
+            if (self.config.stanley_enabled and self.config.stanley_tight_curve_routing
+                    and speed <= self.config.stanley_tight_curve_max_speed_mps):
+                return ControlRegime.STANLEY
             return ControlRegime.PURE_PURSUIT
 
         # --- Default: LMPC ---

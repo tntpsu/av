@@ -500,25 +500,30 @@ class TestClosedLoopUnityFrame:
         steady = _arc_frames(speed)
         assert float(np.mean(a['d'][steady])) == pytest.approx(-float(np.mean(b['d'][steady])), abs=0.02)
 
+    @pytest.mark.parametrize("owner", ["pp_legacy_routing", "stanley_production"])
     @pytest.mark.parametrize("direction", [+1.0, -1.0], ids=["left", "right"])
-    def test_regime_zero_path_steers_toward_the_reference_on_a_tight_arc(self, direction):
-        """κ=±0.067 (R15) > mpc_max_map_curvature 0.015 → regime 0 after the 30-frame hold. Sign only: the
-        actuator gain here is identified for 6–13 m/s and under-delivers at 4 m/s (the plant cannot hold R15 at
-        the 0.7·max_steer command cap), so convergence is not asserted — the direction of the reaction is."""
-        r = run_closed_loop(direction / 15.0, 4.0, n_frames=260)
-        on_arc = r['regime'] == int(ControlRegime.PURE_PURSUIT)
-        assert on_arc.any(), f"regime never left LINEAR_MPC: {np.unique(r['regime'])}"
-        u_pp = r['u'][on_arc]
-        # Assert the net reaction, not every frame. A per-frame `np.all(sign == ...)` over a >1e-3 deadband is
-        # brittle: one near-zero command whose last digit flips under an xdist worker (the OSQP determinism
-        # class) failed this as a REAL_BREAK on 2026-10-12 though it passed every serial re-run. The physical
-        # claim is "the regime-0 path steers INTO the arc" — so check the mean command is clearly signed the
-        # right way and that no CLEARLY-large command (>5e-3) points the wrong way.
-        assert np.sign(np.mean(u_pp)) == -direction and abs(np.mean(u_pp)) > 5e-3, \
-            f"regime-0 path must steer into the arc: mean command {np.mean(u_pp):+.4f}, expected sign {-direction:+.0f}"
-        wrong = u_pp[np.sign(u_pp) == direction]
-        assert not np.any(np.abs(wrong) > 5e-3), \
-            f"a clearly-large command pointed OUT of the arc: {wrong[np.abs(wrong) > 5e-3]}"
+    def test_tight_arc_owner_steers_toward_the_reference(self, owner, direction):
+        """The tight-arc slot (map κ ≥ mpc_max_map_curvature 0.015) is Stanley's since the 2026-10-16 promotion
+        (`stanley_tight_curve_routing`); Pure Pursuit keeps it under the legacy routing and remains the solver-failure
+        fallback, so BOTH owners are held to the same sign contract. Sign only — the plant is identified for 6–13 m/s and
+        is not a verdict on tight-arc convergence (it diverges at R15 for every controller); the direction of the net
+        reaction is asserted. PP is checked at R15/4 m/s as before; Stanley at R40/5.3 m/s, inside the regime where
+        the harness is at least stable for it."""
+        cfg = _production_cfg()
+        if owner == "pp_legacy_routing":
+            cfg['control']['regime']['stanley_tight_curve_routing'] = False
+            kappa, speed, want = direction / 15.0, 4.0, int(ControlRegime.PURE_PURSUIT)
+        else:
+            kappa, speed, want = direction / 40.0, 5.3, int(ControlRegime.STANLEY)
+        r = run_closed_loop(kappa, speed, n_frames=260, cfg=cfg)
+        on_arc = r['regime'] == want
+        assert on_arc.any(), f"{owner}: expected regime {want} on the arc, saw {np.unique(r['regime'])}"
+        u = r['u'][on_arc]
+        # Net reaction, not every frame (per-frame checks over a >1e-3 deadband were xdist-brittle, 2026-10-12).
+        assert np.sign(np.mean(u)) == -direction and abs(np.mean(u)) > 5e-3, \
+            f"{owner} must steer into the arc: mean command {np.mean(u):+.4f}, expected sign {-direction:+.0f}"
+        wrong = u[np.sign(u) == direction]
+        assert not np.any(np.abs(wrong) > 5e-3), f"{owner}: a clearly-large command pointed OUT of the arc: {wrong[np.abs(wrong) > 5e-3]}"
 
 
 # ===========================================================================
