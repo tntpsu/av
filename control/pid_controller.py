@@ -4,6 +4,9 @@ Handles both lateral (steering) and longitudinal (throttle/brake) control.
 """
 
 import numpy as np
+
+# Stanley normalizes its radian command by the same 30° Pure Pursuit uses (stanley_output_units: radians).
+STANLEY_MAX_STEER_RAD = float(np.radians(30.0))
 from typing import Optional, Tuple, Dict, Union, Any
 from pathlib import Path
 import math
@@ -375,6 +378,12 @@ class LateralController:
                  stanley_curvature_ff_enabled: bool = False,
                  stanley_wheelbase_m: float = 2.7,
                  stanley_ff_slew_rate_rad: float = 0.05,
+                 stanley_cross_track_source_aware: bool = False,
+                 stanley_output_units: str = "normalized_legacy",
+                 stanley_heading_source: str = "pp_heading_to_ref",
+                 stanley_ff_plant_gain: float = 1.0,
+                 stanley_ff_preview_tau_s: float = 0.0,
+                 stanley_ff_curvature_source: str = "reference_point",
                  pp_feedback_gain: float = 0.15,
                  pp_min_lookahead: float = 0.5,
                  pp_speed_norm_enabled: bool = False,
@@ -658,6 +667,13 @@ class LateralController:
         self.stanley_curvature_ff_enabled = bool(stanley_curvature_ff_enabled)
         self.stanley_wheelbase_m = float(stanley_wheelbase_m)
         self.stanley_ff_slew_rate_rad = max(0.001, float(stanley_ff_slew_rate_rad))
+        # Kill-switches (2026-10-15, tight-curve research Phase 1); legacy defaults keep production bit-exact.
+        self.stanley_cross_track_source_aware = bool(stanley_cross_track_source_aware)
+        self.stanley_output_units = str(stanley_output_units)
+        self.stanley_heading_source = str(stanley_heading_source)
+        self.stanley_ff_plant_gain = max(0.1, float(stanley_ff_plant_gain))
+        self.stanley_ff_preview_tau_s = max(0.0, float(stanley_ff_preview_tau_s))
+        self.stanley_ff_curvature_source = str(stanley_ff_curvature_source)
         self._prev_stanley_ff_term: float = 0.0
         self.pp_feedback_gain = max(0.0, float(pp_feedback_gain))
         self.pp_min_lookahead = max(0.1, float(pp_min_lookahead))
@@ -4573,14 +4589,23 @@ class LateralController:
         if self.stanley_curvature_ff_enabled and curvature is not None and np.isfinite(float(curvature)):
             # Geometric feedforward: delta = -arctan(L * kappa).
             # Negative sign: left curve (kappa>0) needs left steer (negative delta).
-            ff_raw = float(-np.arctan(self.stanley_wheelbase_m * float(curvature)))
+            # Divide by the MEASURED steering delivery ratio (closed-loop sysid 2026-10-11: Unity delivers ≈0.78 of a
+            # commanded steer) so the arc is held by feedforward alone and the error terms only correct disturbances.
+            # 1.0 = legacy (uncompensated → a persistent cross-track error makes up the shortfall: R40 ≈0.12 m, R15 ≈0.2 m).
+            ff_raw = float(-np.arctan(self.stanley_wheelbase_m * float(curvature))) / getattr(self, 'stanley_ff_plant_gain', 1.0)
             # Slew-rate limit: cap change per frame to prevent C1→C2 sign-flip spike.
             delta = float(np.clip(ff_raw - self._prev_stanley_ff_term,
                                   -self.stanley_ff_slew_rate_rad,
                                   self.stanley_ff_slew_rate_rad))
             ff_term = self._prev_stanley_ff_term + delta
         self._prev_stanley_ff_term = ff_term
-        steering_norm = np.clip(heading_term + crosstrack_term + ff_term, -1.0, 1.0)
+        total_rad = heading_term + crosstrack_term + ff_term
+        if getattr(self, 'stanley_output_units', 'normalized_legacy') == 'radians':
+            # Physical: the law's radian sum normalized by the same 30° PP uses, so −atan(L·κ) is a true feedforward.
+            steering_norm = np.clip(total_rad / STANLEY_MAX_STEER_RAD, -1.0, 1.0)
+        else:
+            # Legacy defect: the radian sum passed through as a NORMALIZED command (≈0.37× once scaled by max_steering).
+            steering_norm = np.clip(total_rad, -1.0, 1.0)
         return {
             'steering_normalized': float(steering_norm),
             'stanley_heading_term': float(heading_term),
@@ -5792,12 +5817,18 @@ class VehicleController:
                  speed_gain_curvature_min: float = 0.002,
                  speed_gain_curvature_max: float = 0.015,
                  control_mode: str = "pid",
-                 stanley_k: float = 1.0,
-                 stanley_soft_speed: float = 2.0,
-                 stanley_heading_weight: float = 1.0,
-                 stanley_curvature_ff_enabled: bool = False,
-                 stanley_wheelbase_m: float = 2.7,
-                 stanley_ff_slew_rate_rad: float = 0.05,
+                 stanley_k=None,   # None → resolved from full_config['control']['lateral'] (2026-10-15)
+                 stanley_soft_speed=None,   # None → resolved from full_config['control']['lateral'] (2026-10-15)
+                 stanley_heading_weight=None,   # None → resolved from full_config['control']['lateral'] (2026-10-15)
+                 stanley_curvature_ff_enabled=None,   # None → resolved from full_config['control']['lateral'] (2026-10-15)
+                 stanley_wheelbase_m=None,   # None → resolved from full_config['control']['lateral'] (2026-10-15)
+                 stanley_ff_slew_rate_rad=None,   # None → resolved from full_config['control']['lateral'] (2026-10-15)
+                 stanley_cross_track_source_aware=None,   # None → resolved from full_config['control']['lateral'] (2026-10-15)
+                 stanley_output_units=None,   # None → resolved from full_config['control']['lateral'] (2026-10-15)
+                 stanley_heading_source=None,   # None → resolved from full_config['control']['lateral'] (2026-10-15)
+                 stanley_ff_plant_gain=None,   # None → resolved from full_config['control']['lateral'] (2026-10-15)
+                 stanley_ff_preview_tau_s=None,   # None → resolved from full_config['control']['lateral'] (2026-10-15)
+                 stanley_ff_curvature_source=None,   # None → resolved from full_config['control']['lateral'] (2026-10-15)
                  pp_feedback_gain: float = 0.15,
                  pp_min_lookahead: float = 0.5,
                  pp_speed_norm_enabled: bool = False,
@@ -5868,6 +5899,26 @@ class VehicleController:
             import numpy as np
             lateral_error_clip = np.pi / 4
         
+        # Stanley law keys: explicit kwargs win (the orchestrator passes them); otherwise read the lateral config so a
+        # VehicleController(full_config=...) built by tests/harness/replay runs the SAME law as production. Before
+        # 2026-10-15 these silently fell back to constructor defaults on that path (wrapper forwarding gap, Smell 6).
+        _lat_cfg_init = ((full_config or {}).get('control', {}) or {}).get('lateral', {}) or {}
+        _stanley_defaults = {'stanley_k': 1.0, 'stanley_soft_speed': 2.0, 'stanley_heading_weight': 1.0,
+                             'stanley_curvature_ff_enabled': False, 'stanley_wheelbase_m': 2.7,
+                             'stanley_ff_slew_rate_rad': 0.05, 'stanley_cross_track_source_aware': False,
+                             'stanley_output_units': 'normalized_legacy', 'stanley_heading_source': 'pp_heading_to_ref', 'stanley_ff_plant_gain': 1.0, 'stanley_ff_preview_tau_s': 0.0, 'stanley_ff_curvature_source': 'reference_point'}
+        if stanley_k is None: stanley_k = _lat_cfg_init.get('stanley_k', _stanley_defaults['stanley_k'])
+        if stanley_soft_speed is None: stanley_soft_speed = _lat_cfg_init.get('stanley_soft_speed', _stanley_defaults['stanley_soft_speed'])
+        if stanley_heading_weight is None: stanley_heading_weight = _lat_cfg_init.get('stanley_heading_weight', _stanley_defaults['stanley_heading_weight'])
+        if stanley_curvature_ff_enabled is None: stanley_curvature_ff_enabled = _lat_cfg_init.get('stanley_curvature_ff_enabled', _stanley_defaults['stanley_curvature_ff_enabled'])
+        if stanley_wheelbase_m is None: stanley_wheelbase_m = _lat_cfg_init.get('stanley_wheelbase_m', _stanley_defaults['stanley_wheelbase_m'])
+        if stanley_ff_slew_rate_rad is None: stanley_ff_slew_rate_rad = _lat_cfg_init.get('stanley_ff_slew_rate_rad', _stanley_defaults['stanley_ff_slew_rate_rad'])
+        if stanley_cross_track_source_aware is None: stanley_cross_track_source_aware = _lat_cfg_init.get('stanley_cross_track_source_aware', _stanley_defaults['stanley_cross_track_source_aware'])
+        if stanley_output_units is None: stanley_output_units = _lat_cfg_init.get('stanley_output_units', _stanley_defaults['stanley_output_units'])
+        if stanley_heading_source is None: stanley_heading_source = _lat_cfg_init.get('stanley_heading_source', _stanley_defaults['stanley_heading_source'])
+        if stanley_ff_plant_gain is None: stanley_ff_plant_gain = _lat_cfg_init.get('stanley_ff_plant_gain', _stanley_defaults['stanley_ff_plant_gain'])
+        if stanley_ff_preview_tau_s is None: stanley_ff_preview_tau_s = _lat_cfg_init.get('stanley_ff_preview_tau_s', _stanley_defaults['stanley_ff_preview_tau_s'])
+        if stanley_ff_curvature_source is None: stanley_ff_curvature_source = _lat_cfg_init.get('stanley_ff_curvature_source', _stanley_defaults['stanley_ff_curvature_source'])
         self.lateral_controller = LateralController(
             kp=lateral_kp,
             ki=lateral_ki,
@@ -6067,6 +6118,12 @@ class VehicleController:
             stanley_curvature_ff_enabled=stanley_curvature_ff_enabled,
             stanley_wheelbase_m=stanley_wheelbase_m,
             stanley_ff_slew_rate_rad=stanley_ff_slew_rate_rad,
+            stanley_cross_track_source_aware=stanley_cross_track_source_aware,
+            stanley_output_units=stanley_output_units,
+            stanley_heading_source=stanley_heading_source,
+            stanley_ff_plant_gain=stanley_ff_plant_gain,
+            stanley_ff_preview_tau_s=stanley_ff_preview_tau_s,
+            stanley_ff_curvature_source=stanley_ff_curvature_source,
             pp_feedback_gain=pp_feedback_gain,
             pp_min_lookahead=pp_min_lookahead,
             pp_speed_norm_enabled=pp_speed_norm_enabled,
@@ -6877,24 +6934,56 @@ class VehicleController:
                 # Sign: use +gt_cross_track directly (NO negation — opposite of MPC convention).
                 # MPC negates because its e_lat>0 means car-is-RIGHT; Stanley's lat_error>0 means steer-right.
                 lat_err = float(gt_cross_track)
+                # 2026-10-15: the first-priority source 'road_frame_at_car' is the CAR's offset (+right) — the exact
+                # negative of the lane-centre convention assumed above (corr −1.000 vs lane_center_x_at_car over
+                # 993 frames). Without this flip Stanley's cross-track feedback is inverted on that source.
+                if (getattr(self.lateral_controller, 'stanley_cross_track_source_aware', False)
+                        and reference_point.get('gt_cross_track_source_code') == 'road_frame_at_car'):
+                    lat_err = -lat_err
             else:
                 lat_err = float(lateral_metadata.get('lateral_error', 0.0))
             # Always use PP-derived heading_error for heading term (same as internal Stanley formula).
             hdg_err = float(lateral_metadata.get('heading_error', 0.0))
+            # 2026-10-15: PP's heading_error is the pursuit angle to the lookahead point — it CONTAINS cross-track
+            # (corr +0.59 with the car offset, −0.68 with the true heading error on s_loop). Classical Stanley needs
+            # the path-tangent heading error; the orchestrator's gt_heading_error_rad (headingDeltaDeg, + = car
+            # pointing right) is that. Stanley's term is steer-right-positive, so pointing right → negative.
+            if (getattr(self.lateral_controller, 'stanley_heading_source', 'pp_heading_to_ref') == 'gt_path_tangent'
+                    and reference_point.get('gt_heading_error_rad') is not None):
+                hdg_err = -float(reference_point['gt_heading_error_rad'])
             speed_for_stanley = float(current_state.get('speed', 0.0))
             # Curvature feedforward: signed path curvature at nearest map point.
             # reference_point['curvature'] = curvature_primary_abs * curvature_sign (+1=left, -1=right).
             stanley_curvature = reference_point.get('curvature')
+            # 2026-10-15: lag-preview FF. The at-car κ cannot anticipate an S-reversal; the plant answers ≈0.35 s late
+            # (actuator τ 0.25 s + 2 frames), ≈1.9 m at 5.3 m/s — the Phase 1b excursion (−0.85 m) sat exactly there.
+            # Evaluate κ at v·τ along the map horizon (same sign convention as 'curvature'; LMPC applies one sign to both).
+            # 2026-10-15 SIGN: reference_point['curvature'] is +RIGHT (sign from the reference heading; agrees 1.00 with
+            # groundTruthPathCurvature), while the map horizon is +LEFT (track profile direction_sign = -1 for 'right').
+            # The FF formula -atan(L·κ) is written for +left → the legacy 'reference_point' source steers OUT of the
+            # curve (Phase 1c arms A/B: more FF gain → more under-steer). 'map_horizon' reads the +left field.
+            _tau_prev = getattr(self.lateral_controller, 'stanley_ff_preview_tau_s', 0.0)
+            if getattr(self.lateral_controller, 'stanley_ff_curvature_source', 'reference_point') == 'map_horizon':
+                _hs = reference_point.get('curvature_horizon_signed'); _hd = reference_point.get('curvature_horizon_distances')
+                if _hs is not None and _hd is not None and len(_hs) > 0 and len(_hs) == len(_hd):
+                    stanley_curvature = float(np.interp(speed_for_stanley * _tau_prev,
+                                                        np.asarray(_hd, dtype=float), np.asarray(_hs, dtype=float)))
             stanley_result = self.lateral_controller.compute_stanley_from_errors(
                 lateral_error=lat_err,
                 heading_error=hdg_err,
                 speed=speed_for_stanley,
                 curvature=stanley_curvature,
             )
-            stanley_steer = (
-                float(stanley_result['steering_normalized'])
-                * self.lateral_controller.max_steering
-            )
+            if getattr(self.lateral_controller, 'stanley_output_units', 'normalized_legacy') == 'radians':
+                # Same finalization as Pure Pursuit: a normalized command CLIPPED to ±max_steering.
+                stanley_steer = float(np.clip(float(stanley_result['steering_normalized']),
+                                             -self.lateral_controller.max_steering,
+                                             self.lateral_controller.max_steering))
+            else:
+                stanley_steer = (
+                    float(stanley_result['steering_normalized'])
+                    * self.lateral_controller.max_steering
+                )
             if blend_weight < 1.0:
                 # Smooth blend: (1-w)*PP + w*Stanley
                 steering = (1.0 - blend_weight) * steering + blend_weight * stanley_steer

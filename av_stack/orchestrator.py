@@ -940,6 +940,12 @@ class AVStack:
             stanley_curvature_ff_enabled=lateral_cfg.get('stanley_curvature_ff_enabled', False),
             stanley_wheelbase_m=lateral_cfg.get('stanley_wheelbase_m', 2.7),
             stanley_ff_slew_rate_rad=lateral_cfg.get('stanley_ff_slew_rate_rad', 0.05),
+            stanley_cross_track_source_aware=lateral_cfg.get('stanley_cross_track_source_aware', False),
+            stanley_output_units=lateral_cfg.get('stanley_output_units', 'normalized_legacy'),
+            stanley_heading_source=lateral_cfg.get('stanley_heading_source', 'pp_heading_to_ref'),
+            stanley_ff_plant_gain=lateral_cfg.get('stanley_ff_plant_gain', 1.0),
+            stanley_ff_preview_tau_s=lateral_cfg.get('stanley_ff_preview_tau_s', 0.0),
+            stanley_ff_curvature_source=lateral_cfg.get('stanley_ff_curvature_source', 'reference_point'),
             pp_feedback_gain=lateral_cfg.get('pp_feedback_gain', 0.15),
             pp_min_lookahead=lateral_cfg.get('pp_min_lookahead', 0.5),
             pp_speed_norm_enabled=bool(
