@@ -1364,5 +1364,46 @@
     "superseded_by": null,
     "resolved_by": null,
     "next": "Nightly on the fully promoted stack; source fix for the unsigned GT curvature; T-STANLEY-FF-SPEED-MAP; speed-owner consolidation."
+  },
+  {
+    "date": "2026-10-17",
+    "target_metric": "evening six-track pass on the fully promoted stack (Stanley + inter-frame map_signed), 1 run/track, 18:02\u201318:09",
+    "target_track": "all six lateral tracks",
+    "approach": "Production config untouched; gives tonight's quick-mode sweep independent same-day data.",
+    "fix_level": "VALIDATION",
+    "hypothesis": null,
+    "outcome": "CONFIRMED",
+    "outcome_status": "CONFIRMED",
+    "metric_before": null,
+    "metric_after": null,
+    "root_cause_detail": "mixed 98.9 (all layers \u226595, min 96.6), hairpin 97.7 (Traj 94.5, Perception 94.0), s_loop 94.5 (Traj 96.2; SC 49.6 floor), hill 98.5 (Traj 98.4, Control 100, SC 86.1 floor), highway 99.7, sweeping 99.4; Safety 100 / OOL 0 everywhere. Hill Control has gone 86 \u2192 91 \u2192 94 \u2192 100 across the two promotions \u2014 its only remaining blocker is the speed-owner floor.",
+    "iterations_spent": 0,
+    "files_changed": [],
+    "superseded_by": null,
+    "resolved_by": null,
+    "next": "Unity GetPathCurvature sign-axis fix (Vector3.forward \u2192 Vector3.up) under sign check now."
+  },
+  {
+    "date": "2026-10-17",
+    "target_metric": "T-LATERAL-DUAL-CURVATURE-SIGN \u2014 source fix: signed GT curvature from Unity + signed reference_point[\"curvature\"]",
+    "target_track": "all tracks (every consumer of the reference curvature)",
+    "approach": "Two layers. (1) Unity GroundTruthReporter.GetPathCurvature: the heading-change sign dotted the cross product with Vector3.forward; the ground plane is XZ with +Y up (every other frame computation uses Vector3.Cross(Vector3.up, dir) and Atan2(x, z)), so Dot \u2248 0 and Mathf.Sign(0) = +1 \u2192 unsigned on every recording. Fixed to Vector3.up and negated to the map's +left convention; verified by rebuild + runs: sweeping (all left) +0.0033 on every arc frame, mixed (all right) \u22120.0050. (2) Orchestrator: reference_point[\"curvature\"] took its sign from the planner's UNSIGNED value first; new pure function select_reference_curvature_sign with kill-switch trajectory.reference_curvature_sign_source (planner = legacy | gt_map = signed GT/map first). 5 unit tests.",
+    "fix_level": "DESIGN (one convention per physical quantity, converted at the source)",
+    "hypothesis": "Every consumer (LMPC camera kappa_ref bias guards, local-curve-reference direction, Stanley legacy FF source, recorded trajectory/reference_point_curvature) receives a signed +left curvature; PP unaffected (it re-signs by heading).",
+    "outcome": "CONFIRMED \u2014 no regression on six tracks; signs correct at every layer",
+    "outcome_status": "CONFIRMED",
+    "metric_before": null,
+    "metric_after": null,
+    "root_cause_detail": "Wrong up-axis in one sign computation (Unity) + an unsigned planner value consulted first (orchestrator). Both hid behind the fact that |\u03ba| was always \"right\" for the controllers' abs-only uses. VALIDATION 18:19\u201318:36 (\u00d72, Unity fixed + gt_map) vs today's legacy (\u00d73): mixed 97.8\u219298.8 (Traj 94.1\u219296.4), hairpin 97.3\u219297.6 (Traj 92.8\u219294.3), s_loop 94.4=, hill 97.8\u219297.7, highway 99.7\u219299.8, sweeping 99.4\u219299.3. Recorded trajectory/reference_point_curvature now +0.0033 on sweeping (left) and \u22120.0050 on mixed (right); LMPC mpc_kappa_ref (post \u22121) = \u2212GT on both \u2192 kappa_ref and horizon share one convention. Full suite 2796 passed.",
+    "iterations_spent": 1,
+    "files_changed": [
+      "unity/AVSimulation/Assets/Scripts/GroundTruthReporter.cs",
+      "av_stack/orchestrator.py",
+      "config/av_stack_config.yaml",
+      "tests/test_reference_curvature_sign_source.py"
+    ],
+    "superseded_by": null,
+    "resolved_by": null,
+    "next": "Commit (user); then T-STANLEY-FF-SPEED-MAP; speed-owner consolidation."
   }
 ]

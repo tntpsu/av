@@ -1657,7 +1657,7 @@ R200 weave (3/5 in the same-night control) plus a corner-entry handoff removed b
 after promotion: SpeedCompliance floors (s_loop/hill, speed owner), hill Control oscillation, hairpin Perception 94.0,
 T-LATERAL-DUAL-CURVATURE-SIGN, T-STANLEY-FF-SPEED-MAP, LMPC R200 weave rate (nightly watch).
 
-### T-LATERAL-DUAL-CURVATURE-SIGN — reference_point['curvature'] is UNSIGNED; the map horizon is signed (+left) (2026-10-15/17)
+### T-LATERAL-DUAL-CURVATURE-SIGN — RESOLVED 2026-10-17 (source fix validated; commit pending)
 **Corrected 2026-10-17.** `reference_point['curvature']` is not "+right" as first written: it is **always positive**. On
 sweeping_highway (all LEFT curves) it is +0.0033 on every frame; on s_loop it has zero variance across left AND right arcs.
 Mechanism: the orchestrator takes `gt_curvature_signed` from Unity "directly" (orchestrator.py ~5315) and that field
@@ -1669,7 +1669,9 @@ used on 100 % of LMPC frames) → only the bias-correction sign guards (`_bias_c
 guard", "active-curve preserve") and the non-preview `copysign` branch see the wrong sign — inverted on right-hand curves.
 **Done 2026-10-17 (part 2):** the INTER-FRAME writer was the real exposure — it received the unsigned GT curvature as its
 only κ (no horizon). Kill-switched `mpc_interframe_curvature_source: map_signed` — harness-verified; the first Unity A/B was INVALID (both arms
-legacy, caught by the runtime snapshot); valid snapshot-verified A/B: mixed 96.2→98.8, sweeping = (journal #61). **PROMOTED 2026-10-17.** **Still to do:** (1) `mpc_kappa_ref_from_horizon` for the camera-frame bias guards (minor); (2) fix at the source: derive the GT curvature sign in Unity or from the
+legacy, caught by the runtime snapshot); valid snapshot-verified A/B: mixed 96.2→98.8, sweeping = (journal #61). **PROMOTED 2026-10-17.** **Source fix 2026-10-17 (journal #65):** Unity GetPathCurvature dotted its cross product with Vector3.forward on an XZ ground
+plane (Dot≈0 → Sign(0)=+1) → fixed to Vector3.up, negated to +left; orchestrator `reference_curvature_sign_source: gt_map` signs
+reference_point['curvature'] from the GT/map first (planner value is unsigned). Validated ×2 on six tracks (no regression; mixed +1.0, hairpin Traj +1.5). `mpc_kappa_ref_from_horizon` is now unnecessary. Remaining: (1) (2) fix at the source: derive the GT curvature sign in Unity or from the
 map when Unity's field is unsigned; (3) a contract test: on a single-direction track the recorded reference_point_curvature
 must change sign with direction. Related: [[feedback_verify_metric_frame_before_tuning]] — a field named "signed" was not.
 

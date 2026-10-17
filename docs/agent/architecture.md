@@ -509,6 +509,7 @@ held — the LMPC curvature ceiling (`map κ ≥ mpc_max_map_curvature`, preview
 **Results (at-car frame, 2026-10-15):** s_loop Traj 81.9 → 95.4, Control 100, RMSE 0.37 → 0.082 m; hairpin overall
 49.3 → 92.4 (scorer frame fixed), RMSE 0.97 → 0.089 m, Control 100, OOL 0 both. Tests:
 `tests/test_stanley_tight_curve_contract.py`, `tests/test_regime_selector_stanley_tight.py`.
-**Open:** T-LATERAL-DUAL-CURVATURE-SIGN — the LMPC's `kappa_ref` is |κ| (always one sign after the switch) while its QP
-runs on the signed horizon; only the bias-correction sign guards see the wrong sign (right-hand curves). **Harness limit:** `tests/test_lateral_sign_contract.py`'s plant is invalid at R15 for every controller
+**Resolved 2026-10-17:** every curvature is signed +left at the source (Unity `GetPathCurvature` axis fix; orchestrator
+`reference_curvature_sign_source: gt_map`; inter-frame writer `mpc_interframe_curvature_source: map_signed`), so both LMPC
+writers and all `reference_point['curvature']` consumers share one convention (T-LATERAL-DUAL-CURVATURE-SIGN). **Harness limit:** `tests/test_lateral_sign_contract.py`'s plant is invalid at R15 for every controller
 (PP diverges 49 m) and emits both curvature fields from one path — Unity is the verdict on tight curves.

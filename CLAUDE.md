@@ -92,12 +92,13 @@ work on a missing `TESTS.md`.
 - **Tight-curve lateral (PROMOTED 2026-10-16, option B):** classical Stanley takes PP's slot on map κ ≥ 0.015 at all speeds ≤ 20 m/s
   (`control.regime.stanley_tight_curve_routing`); its law fixes live under `control.lateral.stanley_*` (source-aware
   sign, `radians` units, `gt_path_tangent` heading, `map_horizon` FF with 0.35 s lag-preview, plant gain 0.78). See architecture.md
-  "Stanley tight-curve controller". Two curvatures coexist in `reference_point`: `['curvature']` is **UNSIGNED** (Unity's GT curvature field carries no sign),
-  `['curvature_horizon_signed']` is signed **+left** (T-LATERAL-DUAL-CURVATURE-SIGN) — never read a sign from the former.
+  "Stanley tight-curve controller". Every curvature is signed **+left** since 2026-10-17: Unity's `GetPathCurvature` (axis fix in GroundTruthReporter.cs),
+  `reference_point['curvature']` (`trajectory.reference_curvature_sign_source: gt_map`) and `curvature_horizon_signed` share one
+  convention (T-LATERAL-DUAL-CURVATURE-SIGN resolved). Before that date `reference_point['curvature']` and the GT field were UNSIGNED.
 - **LMPC inter-frame curvature (PROMOTED 2026-10-17):** `trajectory.mpc.mpc_interframe_curvature_source: map_signed` — the
   inter-frame writer used to receive Unity's UNSIGNED `groundTruthPathCurvature` (wrong-way FF on every right-hand curve for
   ~57 % of LMPC commands; mixed 96.2→98.8, weave gone). `gt_current` is the legacy kill-switch position.
-  `reference_point['curvature']` is still unsigned for every consumer until the source fix (T-LATERAL-DUAL-CURVATURE-SIGN).
+  Since 2026-10-17 `reference_point['curvature']` is signed (+left) as well, so both LMPC writers share one convention.
 - **LMPC curvature sign:** `trajectory.mpc.mpc_curvature_sign: -1.0` since 2026-10-11 (applied inside `MPCController` for the camera-frame AND inter-frame writers; 1.0 = the legacy wrong-way feedforward, kill-switch). See the Lateral Sign Contract protocol below.
 - **Perception:** Segmentation model active but needs retraining (current checkpoint mislabels car hood as lane). Retraining pipeline ready: `./tools/segmentation/train_pipeline.sh`. See `training/TRAINING_GUIDE.md`.
 

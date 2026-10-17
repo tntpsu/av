@@ -57,6 +57,15 @@ by the runtime snapshot at 01:15 before promotion). Kill-switch `trajectory.mpc.
 (legacy gt_current). **Valid A/B 01:03–01:20 (snapshot-verified, 4 runs/arm): mixed 96.2 → 98.8 (Traj 91.0 → 96.2, Control 88.7 → 98.1,
 arc RMSE 0.189 → 0.100, no weave growth in any run); sweeping 99.3 → 99.2. PROMOTED 2026-10-17 01:25 (user: "Both").**
 
+
+**2026-10-17 18:36 — curvature sign fixed at the SOURCE (journal #65; T-LATERAL-DUAL-CURVATURE-SIGN resolved).** Unity's
+`GetPathCurvature` dotted its cross product with `Vector3.forward` on an XZ ground plane → `Mathf.Sign(0) = +1` → the GT
+curvature had never carried a sign. Fixed to `Vector3.up`, negated to the map's +left; the orchestrator now signs
+`reference_point['curvature']` from the GT/map first (`reference_curvature_sign_source: gt_map`; legacy `planner` took an
+unsigned planner value). Validation ×2 vs today's legacy ×3: mixed 97.8→98.8, hairpin 97.3→97.6 (Traj 92.8→94.3), others
+unchanged; recorded reference curvature +0.0033 on sweeping (left), −0.0050 on mixed (right). Full suite 2796 passed.
+Running in the working tree (gt_map on); commit pending.
+
 **Harness lesson:** the kinematic plant is invalid at R15 for EVERY controller (PP diverges 49 m) and emits both
 curvature fields from one path — it found the sign/units/forwarding defects in its calibrated regime and could not see
 the two convention defects; Unity was the verdict on every tight-curve claim tonight.
