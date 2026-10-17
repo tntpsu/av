@@ -534,5 +534,22 @@
     "prevention": "One curvature field per controller input shared by every writer; convention in the field name; the harness runner now models the production feed ('unsigned_like_production'); every A/B scorer asserts the arm key from the runtime snapshot (the first A/B of this fix was invalid \u2014 both arms legacy \u2014 and was withdrawn).",
     "detection_method": "source read of the inter-frame ctx + recordings (reference_point_curvature constant-positive on an all-left track) + harness two-writer ratio (0.71 vs 0.28) + snapshot-verified Unity A/B",
     "detection_delay_iterations": 2
+  },
+  {
+    "date": "2026-10-17",
+    "commit_summary": "9d482b1 fix(curvature): Unity GetPathCurvature sign used the wrong up axis (unsigned forever); orchestrator signed reference_point['curvature'] from an unsigned planner value",
+    "issue": "Unity dotted the heading-change cross product with Vector3.forward on an XZ ground plane -> Mathf.Sign(0) = +1 on every frame; the orchestrator's sign chain consulted the planner's unsigned curvature first -> reference_point['curvature'] = |kappa| for every consumer.",
+    "deduction_eliminated": "mixed Traj 94.1 -> 96.4; hairpin Traj 92.8 -> 94.3; one +left convention for both LMPC writers and all reference-curvature consumers",
+    "tracks_affected": [
+      "mixed_radius",
+      "hairpin_15",
+      "hill_highway"
+    ],
+    "root_cause": "A 'signed' field that was never signed: a wrong up-axis constant in the only place that needed it, hidden because every controller consumer used abs or re-signed from heading.",
+    "process_stage": "implementation",
+    "process_sub": "implementation/wrong-formula",
+    "prevention": "For any field named 'signed', assert on a single-direction track that frac<0 flips with direction (recordings-based contract test); one convention per physical quantity converted at the source.",
+    "detection_method": "recordings: zero variance of reference_point_curvature across left and right arcs; sweeping (all left) never negative; C# read of GetPathCurvature",
+    "detection_delay_iterations": 1
   }
 ]
