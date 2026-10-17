@@ -1874,13 +1874,16 @@ public class GroundTruthReporter : MonoBehaviour
             return 0f;
         }
 
-        // Signed heading change in the ground plane (XY with world +Z up per project frame).
-        // Unity's Vector3.up is world +Y — wrong axis here; use world +Z = Vector3.forward.
+        // Signed heading change in the ground plane. The ground plane is XZ with world +Y up (every other
+        // frame computation here uses Vector3.Cross(Vector3.up, dir) and Atan2(x, z)); the previous
+        // Vector3.forward axis made Dot(cross, axis) ~ 0 and Mathf.Sign(0) = +1, so the curvature was
+        // UNSIGNED on every recording before 2026-10-17 (T-LATERAL-DUAL-CURVATURE-SIGN). Convention after the
+        // fix: +left (matches the map profile's direction_sign), verified on sweeping (left) / mixed (right).
         Vector3 cross = Vector3.Cross(dirPrev, dirNext);
         float sign = 0f;
         if (cross.sqrMagnitude > 1e-12f)
         {
-            sign = Mathf.Sign(Vector3.Dot(cross, Vector3.forward));
+            sign = -Mathf.Sign(Vector3.Dot(cross, Vector3.up));
         }
         float headingDeltaRad = Vector3.Angle(dirPrev, dirNext) * Mathf.Deg2Rad * sign;
         float arcLength = Mathf.Max(1e-4f, sampleDistance * 2f);

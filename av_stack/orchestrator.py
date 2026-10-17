@@ -138,6 +138,31 @@ class CurvatureContract:
     selection_reason: str
 
 
+
+def select_reference_curvature_sign(planner_curvature, heading, current_path_curvature, source='planner'):
+    """Sign for reference_point['curvature'] (= curvature_primary_abs × sign). Returns ±1.0.
+
+    'planner' (legacy): the planner's own reference curvature first, then the reference heading, then the GT/map path
+    curvature. The planner's value is UNSIGNED (trajectory/inference.py takes abs), so this resolved to +1 on every
+    recording before 2026-10-17 and every consumer of reference_point['curvature'] saw |κ|.
+    'gt_map': the signed GT/map path curvature at the car first (Unity's GetPathCurvature, +left since the 2026-10-17
+    axis fix, or the signed map profile), then the heading, then the planner. One convention (+left) for every consumer.
+    """
+    def _sgn(v):
+        try:
+            v = float(v)
+        except (TypeError, ValueError):
+            return 0.0
+        return float(np.sign(v)) if math.isfinite(v) and abs(v) > 1e-9 else 0.0
+    order = ((current_path_curvature, heading, planner_curvature) if source == 'gt_map'
+             else (planner_curvature, heading, current_path_curvature))
+    for v in order:
+        s = _sgn(v)
+        if s != 0.0:
+            return s
+    return 1.0
+
+
 def gt_lane_boundary_offroad(
     frame: str,
     at_car_cross_track_m,
@@ -7755,22 +7780,11 @@ class AVStack:
             )
             reference_point['map_teleport_skip_count'] = int(map_teleport_skip_count)
             reference_point['map_odometer_jump_rate'] = float(map_odometer_jump_rate)
-            signed_curvature = reference_point.get('curvature')
-            curvature_sign = (
-                np.sign(float(signed_curvature))
-                if isinstance(signed_curvature, (int, float))
-                and math.isfinite(float(signed_curvature))
-                and abs(float(signed_curvature)) > 1e-9
-                else 0.0
-            )
-            if curvature_sign == 0.0:
-                heading_for_sign = reference_point.get('heading')
-                if isinstance(heading_for_sign, (int, float)) and math.isfinite(float(heading_for_sign)):
-                    curvature_sign = np.sign(float(heading_for_sign))
-            if curvature_sign == 0.0 and isinstance(current_path_curvature, (int, float)):
-                curvature_sign = np.sign(float(current_path_curvature))
-            if curvature_sign == 0.0:
-                curvature_sign = 1.0
+            # 2026-10-17: sign source is a kill-switch (trajectory.reference_curvature_sign_source). Legacy 'planner'
+            # consulted the planner's UNSIGNED value first → +1 on every frame → every consumer saw |κ|.
+            curvature_sign = select_reference_curvature_sign(
+                reference_point.get('curvature'), reference_point.get('heading'), current_path_curvature,
+                str(self.trajectory_config.get('reference_curvature_sign_source', 'planner')))
             reference_point['curvature'] = float(curvature_primary_abs) * float(curvature_sign)
             reference_point['curvature_source'] = 'primary_contract'
             reference_point['distance_to_curve_start_m'] = (

@@ -472,6 +472,9 @@ trajectory:
   point_spacing: 1.0
   target_speed: 12.0
   reference_lookahead: 9.0
+  # 2026-10-17: sign of reference_point['curvature']. planner (legacy) resolved to +1 on every frame (the planner's value is
+  # unsigned); gt_map takes the signed GT/map path curvature at the car first (+left, matches the map profile).
+  reference_curvature_sign_source: gt_map   # planner | gt_map
   dynamic_reference_lookahead: true
   curve_scheduler_mode: phase_active   # validated on s_loop + mixed_radius; highway unaffected (no curves)
   reference_lookahead_phase_active_entry_scale_min: 0.90
