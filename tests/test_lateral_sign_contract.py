@@ -276,7 +276,7 @@ PERCEPTION_NOISE_HEADING = 0.022  # rad, 1σ
 
 def run_closed_loop_interframe(kappa: float, speed: float, n_camera: int = 220, d0_right: float = 0.0,
                                cfg: Optional[dict] = None, noise: bool = True,
-                               seed: int = 0) -> Dict[str, np.ndarray]:
+                               seed: int = 0, interframe_curvature: str = 'signed') -> Dict[str, np.ndarray]:
     """Drive the production VehicleController with BOTH writers around Path(kappa). One camera-frame
     compute_control per 0.05 s and one compute_interframe_steering on the 0.025 s half-tick, plant stepping
     at FINE_DT. Records the at-car offset / command / regime at the camera ticks (what the recorder logs)."""
@@ -286,12 +286,16 @@ def run_closed_loop_interframe(kappa: float, speed: float, n_camera: int = 220, 
     plant = UnityFramePlant(Path(kappa), speed, d0_right=d0_right,
                             delay_frames=max(1, round(0.10 / FINE_DT)))
     rng = np.random.default_rng(seed)
-    d, u, regime = [], [], []
+    d, u, regime, u_inter = [], [], [], []
     kappa_cam = 0.0
     for _ in range(n_camera):
         # --- camera frame: full compute_control (perception noise on the observed error) ---
         state, ref = plant.observe()
         kappa_cam = float(ref['curvature'])
+        # Production (orchestrator ctx 'curvature_signed') hands the inter-frame writer Unity's groundTruthPathCurvature,
+        # which is UNSIGNED (2026-10-17 finding) — 'unsigned_like_production' reproduces that; 'signed' is the plant's κ.
+        if interframe_curvature == 'unsigned_like_production':
+            kappa_cam = abs(kappa_cam)
         if noise:
             ref = dict(ref)
             nl = float(rng.normal(0, PERCEPTION_NOISE_LAT)); nh = float(rng.normal(0, PERCEPTION_NOISE_HEADING))
@@ -311,11 +315,11 @@ def run_closed_loop_interframe(kappa: float, speed: float, n_camera: int = 220, 
             speed=speed, curvature=kappa_cam, dt=FINE_DT,
             imu_yaw_rate=-istate['angular_velocity_y'])
         if res is not None and res.get('steering') is not None:
-            icmd = float(res['steering']); vc.update_last_steering_norm(icmd)
+            icmd = float(res['steering']); vc.update_last_steering_norm(icmd); u_inter.append(icmd)
             plant.step(icmd, dt=FINE_DT)
         else:
             plant.step(cmd, dt=FINE_DT)   # no inter-frame update this cycle: hold the camera command
-    return {'d': np.array(d), 'u': np.array(u), 'regime': np.array(regime)}
+    return {'d': np.array(d), 'u': np.array(u), 'regime': np.array(regime), 'u_inter': np.array(u_inter)}
 
 
 def _mode_growth(d: np.ndarray, sl: slice) -> float:
@@ -668,3 +672,40 @@ class TestHarnessCalibration:
         assert (flipped - legacy) * inward > 0.04, "flip must move the car inward"
         if speed >= 9.0:
             assert abs(flipped) < abs(legacy)
+
+
+class TestInterframeWriterCurvatureSign:
+    """2026-10-17 (T-LATERAL-DUAL-CURVATURE-SIGN): the orchestrator hands compute_interframe_steering
+    `gated['current_path_curvature']` = Unity's groundTruthPathCurvature, which is UNSIGNED (on sweeping_highway, all left
+    curves, reference_point_curvature is +0.0033 on every frame), while the camera-frame writer runs the solver on the signed
+    map horizon. Feedback keeps the inter-frame SIGN right, but its feedforward fights on every RIGHT-hand curve: at R200 /
+    8 m/s the inter-frame command falls to 0.28 of the camera-frame command (0.71 with a signed feed), the camera writer
+    overcompensates (+0.087 vs +0.066) and the steady offset doubles (−0.077 vs −0.038 m). Left-hand curves are untouched by
+    luck — mixed_radius (all right) 95–98 with a weave vs sweeping (all left) 99.3. This runner had always handed the
+    inter-frame call the plant's SIGNED κ (the sensor-model mismatch that hid it). Production fix:
+    `trajectory.mpc.mpc_interframe_curvature_source: map_signed`."""
+
+    @staticmethod
+    def _steady(r):
+        cam = r['u'][len(r['u']) // 2:]; inter = r['u_inter'][len(r['u_inter']) // 2:]; d = r['d'][len(r['d']) // 2:]
+        assert cam.size > 50 and inter.size > 50
+        return float(np.mean(cam)), float(np.mean(inter)), float(np.mean(d))
+
+    def test_signed_feed_is_mirror_symmetric_across_turning_direction(self):
+        L = self._steady(run_closed_loop_interframe(+0.005, 8.0, n_camera=400, noise=False, interframe_curvature='signed'))
+        R = self._steady(run_closed_loop_interframe(-0.005, 8.0, n_camera=400, noise=False, interframe_curvature='signed'))
+        assert L[1] / L[0] == pytest.approx(R[1] / R[0], abs=0.05)           # same inter/camera ratio both ways
+        assert L[2] == pytest.approx(-R[2], abs=0.01)                         # mirrored steady offset
+
+    def test_unsigned_feed_is_harmless_on_a_left_curve(self):
+        S = self._steady(run_closed_loop_interframe(+0.005, 8.0, n_camera=400, noise=False, interframe_curvature='signed'))
+        U = self._steady(run_closed_loop_interframe(+0.005, 8.0, n_camera=400, noise=False, interframe_curvature='unsigned_like_production'))
+        assert U[1] / U[0] == pytest.approx(S[1] / S[0], abs=0.05) and U[2] == pytest.approx(S[2], abs=0.01)
+
+    def test_unsigned_feed_starves_the_interframe_writer_on_a_right_curve(self):
+        """The defect on record: inter-frame command < 0.5 of the camera command and the steady offset ≥ 1.5× the signed case."""
+        S = self._steady(run_closed_loop_interframe(-0.005, 8.0, n_camera=400, noise=False, interframe_curvature='signed'))
+        U = self._steady(run_closed_loop_interframe(-0.005, 8.0, n_camera=400, noise=False, interframe_curvature='unsigned_like_production'))
+        assert np.sign(U[1]) == np.sign(U[0])                                 # sign survives (feedback) ...
+        assert U[1] / U[0] < 0.5 and S[1] / S[0] > 0.6                        # ... magnitude does not
+        assert abs(U[2]) > 1.5 * abs(S[2])

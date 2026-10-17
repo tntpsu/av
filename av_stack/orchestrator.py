@@ -1316,6 +1316,12 @@ class AVStack:
         from av_stack.config import InterframeConfig
         self._interframe_cfg = InterframeConfig.from_config(config)
         self._interframe_enabled = self._interframe_cfg.enabled
+        # 2026-10-17: which curvature the inter-frame LMPC writer receives. 'gt_current' (legacy) is Unity's
+        # groundTruthPathCurvature, which is UNSIGNED — so for ~57 % of LMPC commands the solver saw one fixed sign and
+        # its feedforward pointed the wrong way on every right-hand curve, while the camera-frame writer ran on the
+        # signed map horizon. 'map_signed' hands it the signed map curvature at the car (same convention as the horizon).
+        self._interframe_curvature_source = str(
+            (config.get('trajectory', {}) or {}).get('mpc', {}).get('mpc_interframe_curvature_source', 'gt_current'))
         self._last_full_frame_context: Optional[dict] = None
         self._interframe_count_since_camera: int = 0
         self._interframe_updates_last_cycle: int = 0
@@ -4743,7 +4749,9 @@ class AVStack:
             # Snapshot the count BEFORE resetting (used in ControlCommand construction)
             self._interframe_updates_last_cycle = self._interframe_count_since_camera
             self._last_full_frame_context = {
-                'curvature_signed': float(gated.get('current_path_curvature', 0.0)),
+                'curvature_signed': (float(gated.get('current_path_curvature_map_signed', 0.0))
+                                     if self._interframe_curvature_source == 'map_signed'
+                                     else float(gated.get('current_path_curvature', 0.0))),
                 'grade_rad': float(fv.get('smoothed_grade', 0.0)),
                 'regime': int(cmd.get('regime', 0)),
                 'gt_cross_track_source_code': str(cmd.get('mpc_gt_cross_track_source_code', '') or ''),
@@ -5637,6 +5645,7 @@ class AVStack:
         return {
             'current_speed': current_speed,
             'current_path_curvature': current_path_curvature,
+            'current_path_curvature_map_signed': float(map_curvature_signed),
             'base_reference_lookahead': base_reference_lookahead,
             'reference_lookahead': reference_lookahead,
             'reference_lookahead_diag': reference_lookahead_diag,
@@ -6918,6 +6927,7 @@ class AVStack:
             # Pass through geometry fields needed by downstream
             'current_speed': geo['current_speed'],
             'current_path_curvature': geo['current_path_curvature'],
+            'current_path_curvature_map_signed': geo.get('current_path_curvature_map_signed', geo['current_path_curvature']),
             'preview_curvature_abs': geo['preview_curvature_abs'],
             'preview_curvature_signed': geo.get('preview_curvature_signed'),
             'preview_entry_source': geo['preview_entry_source'],
