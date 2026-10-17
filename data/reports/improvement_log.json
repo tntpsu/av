@@ -517,5 +517,22 @@
     "detection_method": "layer total vs listed deductions mismatch (100-4.6 != 75.4) traced to the unlisted heading penalty",
     "detection_delay_iterations": 0,
     "date": "2026-10-16"
+  },
+  {
+    "date": "2026-10-17",
+    "commit_summary": "6b858ef fix(control): inter-frame LMPC writer received Unity's UNSIGNED curvature; now the signed map curvature (mpc_interframe_curvature_source: map_signed)",
+    "issue": "The orchestrator's inter-frame context handed compute_interframe_steering gated['current_path_curvature'] (Unity groundTruthPathCurvature, unsigned) as the solver's only curvature, so ~57 % of LMPC commands carried a wrong-way feedforward on every right-hand curve while the camera-frame writer ran on the signed horizon.",
+    "deduction_eliminated": "mixed_radius 96.2 -> 98.8 (Traj 91.0 -> 96.2, Control 88.7 -> 98.1); the R200 weave no longer grows; mixed passes all layers >= 95",
+    "tracks_affected": [
+      "mixed_radius",
+      "hill_highway",
+      "highway_65"
+    ],
+    "root_cause": "A field named 'signed' (gt_curvature_signed) is unsigned at its Unity source; two writers of one controller were fed curvature from two different fields with different sign semantics; the two-writer harness handed both the plant's signed value and could not see it.",
+    "process_stage": "design",
+    "process_sub": "design/signal-routing",
+    "prevention": "One curvature field per controller input shared by every writer; convention in the field name; the harness runner now models the production feed ('unsigned_like_production'); every A/B scorer asserts the arm key from the runtime snapshot (the first A/B of this fix was invalid \u2014 both arms legacy \u2014 and was withdrawn).",
+    "detection_method": "source read of the inter-frame ctx + recordings (reference_point_curvature constant-positive on an all-left track) + harness two-writer ratio (0.71 vs 0.28) + snapshot-verified Unity A/B",
+    "detection_delay_iterations": 2
   }
 ]
