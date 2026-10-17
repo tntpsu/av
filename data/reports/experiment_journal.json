@@ -1281,5 +1281,88 @@
     "superseded_by": null,
     "resolved_by": null,
     "next": "Nightly sweep on the promoted stack (fresh 6-track data); /log-fix \u00d73 after commit; T-STANLEY-FF-SPEED-MAP (hairpin Traj \u226595); T-LATERAL-DUAL-CURVATURE-SIGN; speed-owner consolidation (SpeedCompliance floors)."
+  },
+  {
+    "date": "2026-10-17",
+    "target_metric": "CORRECTION \u2014 reference_point[\"curvature\"] is UNSIGNED (not +right)",
+    "target_track": "sweeping_highway, mixed_radius, s_loop",
+    "approach": "Read-only on recordings: trajectory/reference_point_curvature on sweeping_highway (all LEFT arcs) is +0.0033 on every arc frame (min=max, 0 % negative); on s_loop it has zero variance across left and right arcs; ground_truth/path_curvature and unity_feedback/path_curvature_calculated are likewise never negative. mpc_kappa_ref (post mpc_curvature_sign) IS signed (\u2212left/+right) because the LMPC runs on the signed map horizon (preview used 100 %).",
+    "fix_level": "MEASUREMENT (characterization)",
+    "hypothesis": null,
+    "outcome": "CORRECTED",
+    "outcome_status": "CORRECTED",
+    "metric_before": null,
+    "metric_after": null,
+    "root_cause_detail": "Journal #54/#57 and the 10-15 docs said reference_point[\"curvature\"] was \"+right\" because it \"agreed 1.00 with ground_truth/path_curvature\" \u2014 but that GT field is unsigned, so the agreement was between two positive numbers (the s_loop zero-variance signature was missed). Mechanism: orchestrator ~5315 takes gt_curvature_signed from Unity \"directly\"; Unity sends |\u03ba|; the sign fallback resolves to +1 \u2192 reference_point[\"curvature\"] = |\u03ba|. Consequences unchanged in direction: Stanley's legacy FF (\u2212atan(L\u00b7|\u03ba|)) steered LEFT on every curve \u2014 wrong on every right-hand one (s_loop's first arc, all of mixed) \u2014 and the map-horizon source is the correct fix. LMPC: kappa_ref = |\u03ba|\u00b7(\u22121) always negative internally; the QP uses the signed horizon, so only the bias-correction sign guards and the non-preview copysign branch see the wrong sign (right-hand curves). T-LATERAL-DUAL-CURVATURE-SIGN rewritten accordingly.",
+    "iterations_spent": 0,
+    "files_changed": [
+      "docs/agent/tasks.md",
+      "docs/agent/architecture.md",
+      "docs/agent/current_state.md",
+      "CLAUDE.md"
+    ],
+    "superseded_by": null,
+    "resolved_by": null,
+    "next": "Kill-switched mpc_kappa_ref_from_horizon (kappa_ref = signed horizon[0]) + A/B on mixed/sweeping/hill if time allows before 02:00; source fix for the unsigned GT curvature later."
+  },
+  {
+    "date": "2026-10-17",
+    "target_metric": "LMPC inter-frame writer receives UNSIGNED curvature (T-LATERAL-DUAL-CURVATURE-SIGN, part 2)",
+    "target_track": "mixed_radius (all right), sweeping_highway (all left), hill_highway",
+    "approach": "Source: orchestrator inter-frame ctx curvature_signed = gated[current_path_curvature] = Unity groundTruthPathCurvature (unsigned); the camera-frame writer runs the solver on the signed map horizon (preview used 100 %). Harness: added interframe_curvature=\"unsigned_like_production\" to run_closed_loop_interframe (it had always passed the plant's signed \u03ba \u2014 the sensor-model mismatch that hid this).",
+    "fix_level": "CODE PATCH (kill-switched: trajectory.mpc.mpc_interframe_curvature_source gt_current|map_signed)",
+    "hypothesis": "Right-hand curves are under-steered by the inter-frame writer (57 % of LMPC commands) while the camera writer overcompensates \u2192 doubled steady offset + command sawtooth; left-hand curves unaffected.",
+    "outcome": "IMPROVED \u2014 mechanism CONFIRMED in Unity (valid, snapshot-verified A/B)",
+    "outcome_status": "CONFIRMED",
+    "metric_before": 96.2,
+    "metric_after": 98.8,
+    "root_cause_detail": "Harness R200 @ 8 m/s, steady means: signed feed L/R mirror (inter/camera 0.71 both, offset \u00b10.038). Unsigned feed: LEFT identical to signed; RIGHT inter/camera 0.28, camera +0.087 (vs +0.066), steady offset \u22120.077 (2\u00d7). Matches production: sweeping (left) 99.3 vs mixed (right) 95\u201398 with a 0.35 Hz weave. Tests: tests/test_lateral_sign_contract.py::TestInterframeWriterCurvatureSign (3). UNITY A/B (00:27\u201300:46, 3 runs/arm): mixed_radius (all right) gt_current 91.9 (98.1/81.9/95.9, Traj 86.0, arc RMSE 0.256, Ctrl 92.9, steer-rate RMS 0.50/s) \u2192 map_signed 98.6 (97.8/99.0/98.9, Traj 94.9, arc RMSE 0.142, Ctrl 99.0, 0.31/s). hill 97.4\u219297.4 (arc RMSE 0.070\u21920.059). sweeping (all left) 99.3\u219299.4. R200 weave: legacy grows in 2/3 runs (max 0.65, 1.09); map_signed \u2014 the one run that started at 0.26 m DECAYS to 0.04. The week-long \"LMPC R200 weave\" is the two writers alternating right-way/wrong-way FF on right-hand curves. RETRACTION 01:15: the 00:27 A/B was INVALID \u2014 the arm switch used a BSD-sed-incompatible pattern (\\s), the readback line after the switch still read gt_current and every arm-M recording's runtime snapshot says gt_current. The 98.6-vs-91.9 difference was the bimodal weave (3 runs/arm), not the fix. The harness result stands; Unity verification re-run 01:17 with a Python toggle + snapshot-verified scoring. VALID A/B 01:03\u201301:20 (python toggle with readback; every recording's runtime snapshot asserted; 4 runs/arm on mixed, 2 on sweeping): mixed gt_current 96.2 (95.9/99.0/94.5/95.3, Traj 91.0, Ctrl 88.7, arc RMSE 0.189, max 0.69, steer-rate RMS 0.44/s; R200 weave grows in 3/4 runs, peaks 0.67/0.91/0.91) \u2192 map_signed 98.8 (98.6/98.9/98.6/99.0, Traj 96.2, Ctrl 98.1, arc RMSE 0.100, max 0.21, 0.23/s; no run grows, peaks 0.16\u20130.23). sweeping (all left) 99.3 \u2192 99.2 (neutral, as predicted).",
+    "iterations_spent": 1,
+    "files_changed": [
+      "av_stack/orchestrator.py",
+      "config/av_stack_config.yaml",
+      "tests/test_lateral_sign_contract.py"
+    ],
+    "superseded_by": null,
+    "resolved_by": null,
+    "next": "PROMOTE map_signed (user \"Both\"); source fix for the unsigned GT curvature; re-check the LMPC strict-xfails."
+  },
+  {
+    "date": "2026-10-17",
+    "target_metric": "independent six-track sample of the PROMOTED stack (option B), 2 runs/track, 00:11\u201300:25",
+    "target_track": "all six lateral tracks",
+    "approach": "Production config untouched; first data on the promoted stack not generated during the research itself (the 10-16 nightly ran --quick and re-scored the promotion runs).",
+    "fix_level": "VALIDATION",
+    "hypothesis": "Promotion numbers reproduce.",
+    "outcome": "CONFIRMED",
+    "outcome_status": "CONFIRMED",
+    "metric_before": null,
+    "metric_after": null,
+    "root_cause_detail": "mixed 97.2 (99.1/95.3; Traj 92.9, Ctrl 92.5, Saf 100), hairpin 97.1 (96.7/97.5; Traj 91.9, Ctrl 100), s_loop 94.3 (Traj 96.0, RMSE 0.079, SC 47.5 floor), hill 97.5 (Ctrl 94.3, SC 87.7), highway 99.8, sweeping 99.4. Safety 100 and OOL 0 on every run. All within the promotion's five-run spreads.",
+    "iterations_spent": 0,
+    "files_changed": [],
+    "superseded_by": null,
+    "resolved_by": null,
+    "next": "Nightly sweep will quick-read these runs tonight."
+  },
+  {
+    "date": "2026-10-17",
+    "target_metric": "PROMOTION \u2014 mpc_interframe_curvature_source: map_signed (after the valid A/B)",
+    "target_track": "all LMPC tracks (right-hand curves)",
+    "approach": "config/av_stack_config.yaml; legacy gt_current remains the kill-switch position.",
+    "fix_level": "CODE PATCH (correctness)",
+    "hypothesis": null,
+    "outcome": "PROMOTED 2026-10-17 01:25 (user: \"Both\"; first A/B withdrawn, valid A/B confirmed)",
+    "outcome_status": "PROMOTED",
+    "metric_before": 96.2,
+    "metric_after": 98.8,
+    "root_cause_detail": "Evidence: journal #61 (harness + Unity A/B \u00d73). Neutral on left-hand tracks and hill.",
+    "iterations_spent": 0,
+    "files_changed": [
+      "config/av_stack_config.yaml"
+    ],
+    "superseded_by": null,
+    "resolved_by": null,
+    "next": "Nightly on the fully promoted stack; source fix for the unsigned GT curvature; T-STANLEY-FF-SPEED-MAP; speed-owner consolidation."
   }
 ]

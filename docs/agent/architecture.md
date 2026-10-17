@@ -496,9 +496,9 @@ kill-switched defect fix found 2026-10-15 (legacy defaults are bit-exact with th
   together with the next two items (Smell 7 lesson, journal #53).
 - `κ_ff` from the **map horizon** (`stanley_ff_curvature_source: map_horizon`), interpolated `v·τ` ahead
   (`stanley_ff_preview_tau_s: 0.35` = actuator τ 0.25 s + 2 frames; the S-reversal excursion sat exactly one lag
-  ahead). The horizon is **+left** (track-profile `direction_sign`); `reference_point['curvature']` is **+right**
-  (sign from the reference heading) — the formula is written for +left, so the legacy source steered OUT of every
-  curve (journal #54). `stanley_ff_plant_gain: 0.78` divides the FF by the measured steering delivery ratio (closed-loop sysid 2026-10-11); it looked harmful only while the FF was inverted. The lag-preview is neutral at s_loop speed.
+  ahead). The horizon is signed **+left** (track-profile `direction_sign`); `reference_point['curvature']` is **UNSIGNED**
+  (Unity's GT curvature field has no sign, so the orchestrator's sign fallback resolves to +1; corrected 2026-10-17) — the
+  legacy source therefore steered LEFT on every curve, wrong on every right-hand one (journal #54, #60). `stanley_ff_plant_gain: 0.78` divides the FF by the measured steering delivery ratio (closed-loop sysid 2026-10-11); it looked harmful only while the FF was inverted. The lag-preview is neutral at s_loop speed.
 - `VehicleController(full_config=…)` now resolves all `stanley_*` law keys from `control.lateral` (they were
   constructor defaults on that path → harness A/B arms were bit-identical).
 
@@ -509,6 +509,6 @@ held — the LMPC curvature ceiling (`map κ ≥ mpc_max_map_curvature`, preview
 **Results (at-car frame, 2026-10-15):** s_loop Traj 81.9 → 95.4, Control 100, RMSE 0.37 → 0.082 m; hairpin overall
 49.3 → 92.4 (scorer frame fixed), RMSE 0.97 → 0.089 m, Control 100, OOL 0 both. Tests:
 `tests/test_stanley_tight_curve_contract.py`, `tests/test_regime_selector_stanley_tight.py`.
-**Open:** T-LATERAL-DUAL-CURVATURE-SIGN — the LMPC takes `kappa_ref` (+right) and `kappa_horizon` (+left) through ONE
-sign switch. **Harness limit:** `tests/test_lateral_sign_contract.py`'s plant is invalid at R15 for every controller
+**Open:** T-LATERAL-DUAL-CURVATURE-SIGN — the LMPC's `kappa_ref` is |κ| (always one sign after the switch) while its QP
+runs on the signed horizon; only the bias-correction sign guards see the wrong sign (right-hand curves). **Harness limit:** `tests/test_lateral_sign_contract.py`'s plant is invalid at R15 for every controller
 (PP diverges 49 m) and emits both curvature fields from one path — Unity is the verdict on tight curves.

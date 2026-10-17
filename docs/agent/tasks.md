@@ -1657,48 +1657,21 @@ R200 weave (3/5 in the same-night control) plus a corner-entry handoff removed b
 after promotion: SpeedCompliance floors (s_loop/hill, speed owner), hill Control oscillation, hairpin Perception 94.0,
 T-LATERAL-DUAL-CURVATURE-SIGN, T-STANLEY-FF-SPEED-MAP, LMPC R200 weave rate (nightly watch).
 
-### T-LATERAL-DUAL-CURVATURE-SIGN — two signed curvatures, opposite conventions, one sign switch (2026-10-15)
-**Found during the tight-curve Stanley research (journal #54).** `reference_point['curvature']` is **+right** (sign falls back
-to the reference heading; agrees 1.00 with `groundTruthPathCurvature`, itself +right — s_loop's first arc is `direction: right`
-with κ_GT > 0). `reference_point['curvature_horizon_signed']` is **+left** (track profile `direction_sign = -1 if "right"`).
-The LMPC feeds `kappa_ref` from the former and `kappa_horizon` from the latter and multiplies BOTH by `mpc_curvature_sign`
-(−1.0) — so one of its two curvature inputs is inverted relative to the other. `tests/test_lateral_sign_contract.py`'s plant
-emits both fields from ONE path and cannot see this; the harness header's "orchestrator +κ = left" is true of the horizon only.
-Stanley's FF had the same exposure and is fixed by `stanley_ff_curvature_source: map_horizon`. **To do:** (1) a contract test
-on recordings/config that `sign(reference_point_curvature) == sign(horizon[0])` on arcs (currently FAILS by construction);
-(2) decide the single orchestrator convention (+left, matching the LMPC's internal sign and the map) and convert
-`reference_point['curvature']` at its source; (3) re-run the LMPC strict-xfails (`test_zero_error_feedforward_points_into_the_left_arc`,
-regime-0 left-arc sign flip) — they may be this defect. Related: [[feedback_verify_metric_frame_before_tuning]] instance 5.
-
-## Completed Since Last Update
-
-| ID | Task | Date |
-|---|---|---|
-| — | Bridge regression fix: CameraCapture/AVBridge targetFPS 13→15; bridge/client.py persistent executor | 2026-03-22 |
-| — | Teleport observability: `control/teleport_detected` + `control/teleport_jump_m` in HDF5 (5 locations) | 2026-03-22 |
-| — | Tool updates: forced_pp_transition_count metric, priority-0 "STOP PP GAIN TUNING" recommendation, flat_oscillation_not_grade + forced_pp_regime_reset triage patterns | 2026-03-22 |
-| — | Clean baseline established: hill_highway 94.9/100, forced_pp_transition_count=0 (recording_20260322_165640.h5) | 2026-03-22 |
-| — | Codex A/B results invalidated: grade_steering_damping_gain/pp_feedback_gain/pp_max_steering_rate A/B tests all ran against artifact-corrupted baseline (2-4 false teleports each) — all revert to prior defaults | 2026-03-22 |
-| T-078 | Late turn-in root cause fully investigated: MPC cost function structural trade-off (q_lat=1.60, r_steer_rate=2.0 → breakeven q_lat=11.5 for full fix). kappa_ref preview fix tried → oscillation runaway → reverted. PP floor rescue BENIGN (floor lowering caused regression). **DEFERRED.** | 2026-03-22 |
-| 3.5 | 2DOF FF alignment live validated: ff_alignment=True vs False A/B on hill_highway. +0.4 pts, jerk cap hit without (9.2→18.0), adj_rmse 0.297→0.309m, oscillation runaway without. Feature confirmed beneficial, stays default=True. ROADMAP adj_rmse gate (0.25m) not met — gate pre-dates Step 4 MPC-as-primary and should be updated. | 2026-03-22 |
-| Step 5 A-D | NMPC Phases A-D: autobahn_30 track, mpc_autobahn.yaml overlay, nmpc_controller.py (SLSQP + adjoint gradient), pid_controller.py dispatch, HDF5 7-field registration. 1334 tests passing. | 2026-03-22 |
-| Step 5 E+G | NMPC Phases E (tools) + G (unit tests): issue_detector/layer_health/triage_engine/mpc_pipeline/analyze_drive_overall/drive_summary_core NMPC updates; 46 new unit tests (29 controller + 17 regime selector). Adjoint bug fixed: A_k[1,2] corrected from (v/L) to (1/L). | 2026-03-22 |
-| Step 5 H | NMPC Phase H E2E: autobahn_30 PARTIAL PASS. NMPC activated (317/1075 frames, 29.5%), P95=14.66ms, 100% feasibility, 0% LMPC fallback — solver mechanically correct. BUT 2 e-stops from oscillation runaway: nmpc_q_lat=2.0 tuned for 21 m/s, over-aggressive at 12-13 m/s. SmithΔ 0.485m at e-stop frames. Adjoint fix (1/L vs v/L) confirmed by solver correctness. | 2026-03-22 |
-| Step 5 nmpc_q_lat | Speed-adaptive nmpc_q_lat: added to `_MPC_WEIGHT_AUTO_DERIVE_PARAMS` (base=0.7,v_ref=15,κ_ref=0.002). Test YAML: 2.0→0.7. Base config: 2.0→0.7. Auto-derive: at 25m/s autobahn→1.94, hill_highway 12m/s κ=0.010→2.24. All 145 tests green. Phase H-2 re-run needed to confirm 0 e-stops. | 2026-03-22 |
-| Step 5 H-2 | Phase H-2 PASSED: 0 e-stops ✅, 91.2/100 ✅ (target ≥85). NMPC 37.7% frames, 100% feasibility, P95=12.34ms. Residual: oscillation amplitude runaway (RMS 0.004→0.501m), 11 regime transitions (Δsteer=0.172 at handoff), NLP cost std/median=1.3 (warm-start diverging). Root cause: chatter at 9 m/s NMPC threshold. Recording: recording_20260323_095252.h5. | 2026-03-23 |
-| Step 4 H-3 | Phase H-3 PASSED: 97.5/100, 0 e-stops. regime_selector.py: lmpc_nmpc_blend_frames=30/min_hold_frames=40. Test overlay: target_speed 15→25 m/s, nmpc_q_lat auto-derive (~1.62 at 25 m/s). Oscillation NOT runaway (0.006→0.095m). Lateral RMSE 0.212→0.071m. Max Δsteer at transition 0.172→0.078 (55% ↓). Control 80→100/100. Speed ceiling confirmed NOT Unity motor limit — was test overlay target_speed=15. Car reaches 25+ m/s. 18/18 regime selector tests passing. Recording: recording_20260323_111239.h5. | 2026-03-23 |
-| Step 4 H-4 | Phase H-4 FAILED (79.0/100) → inference.py REVERTED. Attempted: add map_preview_κ≤0.001 to heading gate ON guard to fix SignalIntegrity -18.8. Failure mode: `_map_preview_curvature_abs` permanently ≥0.00167 on R600 autobahn → gate never re-arms → jitter propagates → RMSE 0.071→0.301m. Correct fix: pass `current_path_kappa` into gate function (deferred — does not block Step 5). Autobahn baseline H-3 97.5/100 stands. | 2026-03-23 |
-| Step 5 plan | `docs/plans/step5_acc_plan.md` — 5-phase Lead Vehicle Following/ACC plan. IDM longitudinal law, safety layer, PhilViz ACC tab, 5 E2E scenarios. ROADMAP updated. | 2026-03-23 |
-| Debug gaps | 4 tooling gaps fixed: issue_detector κ threshold 0.003→0.0005, triage_engine heading_gate_stuck_on_curve pattern, diagnostics.py heading_suppression_rate + map_preview_curvature per-frame, PhilViz exposes control/curvature_preview_abs. | 2026-03-23 |
-| ACC Phase D | Full ACC toolset: scoring_registry (14 constants), drive_summary_core (_build_acc_health_summary + ACC penalties), issue_detector (6 issue types), triage_engine (4 patterns), layer_health (_score_acc), acc_pipeline_analysis.py CLI, PhilViz ACC tab (acc_pipeline.py backend), analyze_drive_overall Section 16. 19 tests. 0 scoring regressions. | 2026-03-23 |
-| ACC Phase A | Python data pipeline: VehicleState +8 fields, DataRecorder 5 HDF5 locations × 8 fields (vehicle/radar_fwd_* + vehicle/acc_*), orchestrator _pf_run_acc_sensor + init + VehicleState injection, config acc: block (enabled=false). test_lead_vehicle_data_pipeline.py extended to 23 tests. 0 regressions. 1403 tests total. | 2026-03-23 |
-| ACC Phase B | IDM longitudinal controller: acc_controller.py (ACCState enum, ACCParams + from_config(), ACCOutput, ACCController — 6-state machine + IDM + bumpless transfer). Orchestrator: ACCController init, _pf_run_acc_sensor stores RadarReading, new _pf_apply_acc_override (between governor and trajectory planner). Config: 5 new acc keys. test_acc_controller.py 15 tests all passing. 1525 tests total, 0 regressions. | 2026-03-24 |
-| ACC Phase C | Safety layer wiring: emergency_stop_latched set in _pf_apply_acc_override when TTC_ESTOP fires (reason='acc_ttc_violation', same latch mechanism as OOL events). test_acc_safety.py 16 tests — TTC guard boundaries (< threshold), EMERGENCY_BRAKE conditions (gap factor, range_rate sign, priority), detection-loss hysteresis (5 frames, 3 re-arm). 1538 tests total, 0 regressions. | 2026-03-24 |
-| MPC 2DOF FF | 2DOF feedforward/feedback decomposition in mpc_controller.py. QP variable ε=δ−δ_ff, curvature cancels (99.9%). Marginal 2% RMSE improvement — MPC already finds FF in 2 frames. Disabled (`mpc_ff_decomposition_enabled: false`). 22 tests. Diagnostic: diagnose_ff_decomp.py. | 2026-04-13 |
-| MPC preview q_lat | Preview-weighted stage cost shaping: q_lat ramps from step0_scale to 1.0 across horizon. At scale=0.7: halves jerk but no RMSE gain, does not shift stability boundary. Disabled (`mpc_q_lat_preview_step0_scale: 1.0`). 15 tests. | 2026-04-13 |
-| RMSE ceiling | Confirmed RMSE 0.111m floor at q_lat=2.0 is kinematic model-plant mismatch. Neither QP reformulation breaks it. Stability boundary (q_lat≈2.5) is whole-horizon, not step-0. Next: sysid or frequency-dependent damping. | 2026-04-13 |
-
----
+### T-LATERAL-DUAL-CURVATURE-SIGN — reference_point['curvature'] is UNSIGNED; the map horizon is signed (+left) (2026-10-15/17)
+**Corrected 2026-10-17.** `reference_point['curvature']` is not "+right" as first written: it is **always positive**. On
+sweeping_highway (all LEFT curves) it is +0.0033 on every frame; on s_loop it has zero variance across left AND right arcs.
+Mechanism: the orchestrator takes `gt_curvature_signed` from Unity "directly" (orchestrator.py ~5315) and that field
+(`groundTruthPathCurvature`, also `unity_feedback/path_curvature_calculated`) is unsigned, so `curvature_sign` resolves to
++1 and `reference_point['curvature'] = |κ|`. `curvature_horizon_signed` IS signed (+left via the track profile's
+`direction_sign`). Consumers: (a) Stanley FF — fixed (`stanley_ff_curvature_source: map_horizon`); (b) the LMPC's
+`kappa_ref` = |κ| × mpc_curvature_sign(−1) = always negative internally, while the QP runs on the signed horizon (preview
+used on 100 % of LMPC frames) → only the bias-correction sign guards (`_bias_correction * kappa_ref > 0`, "same-sign
+guard", "active-curve preserve") and the non-preview `copysign` branch see the wrong sign — inverted on right-hand curves.
+**Done 2026-10-17 (part 2):** the INTER-FRAME writer was the real exposure — it received the unsigned GT curvature as its
+only κ (no horizon). Kill-switched `mpc_interframe_curvature_source: map_signed` — harness-verified; the first Unity A/B was INVALID (both arms
+legacy, caught by the runtime snapshot); valid snapshot-verified A/B: mixed 96.2→98.8, sweeping = (journal #61). **PROMOTED 2026-10-17.** **Still to do:** (1) `mpc_kappa_ref_from_horizon` for the camera-frame bias guards (minor); (2) fix at the source: derive the GT curvature sign in Unity or from the
+map when Unity's field is unsigned; (3) a contract test: on a single-direction track the recorded reference_point_curvature
+must change sign with direction. Related: [[feedback_verify_metric_frame_before_tuning]] — a field named "signed" was not.
 
 ### T-NMPC-COLD-START-DETERMINISM — NMPC sign-determinism fix across BLAS (2026-05-02)
 

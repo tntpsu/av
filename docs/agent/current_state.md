@@ -19,13 +19,13 @@ inverted FF), the heading-field frame (at-car, fine), FF curvature magnitude (ex
 1. Stanley cross-track sign inverted for the `road_frame_at_car` source (corr −1.000 vs the lane-centre convention
    the code assumed). 2. Stanley radian command passed as a normalized value (≈0.37× gain; FF non-physical).
 3. `VehicleController(full_config=…)` never read `control.lateral.stanley_*` (harness arms were bit-identical).
-4. Stanley FF read `reference_point['curvature']`, which is **+right**; the formula and the map horizon are **+left**
-   → FF steered OUT of every curve (explains the YAML-noted "FF no gain" A/B). 5. Scorer out-of-lane used the
+4. Stanley FF read `reference_point['curvature']`, which is **UNSIGNED** (corrected 10-17: Unity's GT curvature carries no
+   sign); the formula and the map horizon are signed +left → FF steered LEFT on every curve, wrong on right-hand ones (explains the YAML-noted "FF no gain" A/B). 5. Scorer out-of-lane used the
    LOOKAHEAD lane-line fields (−25 Safety on a centred car; `OUT_OF_LANE_GT_FRAME`). 6. Scorer Trajectory heading
    penalty scored PP's pursuit angle (flat −20 on hairpin; `TRAJECTORY_HEADING_SOURCE`). Goldens unchanged by 5 and 6.
 
-**Open:** T-LATERAL-DUAL-CURVATURE-SIGN (the LMPC takes +right kappa_ref and +left kappa_horizon through one sign
-switch — likely behind the "FF points out of every arc" xfail); hairpin Trajectory ≥95 needs the heading-source scorer
+**Open:** T-LATERAL-DUAL-CURVATURE-SIGN (the LMPC's kappa_ref is unsigned |κ| while its QP runs on the signed horizon — only
+the bias-correction sign guards are affected, on right-hand curves); hairpin Trajectory ≥95 needs the heading-source scorer
 fix applied (staged); SpeedCompliance floors (s_loop 48, hill 40) remain the speed-owner design item.
 
 
@@ -44,8 +44,18 @@ fix applied (staged); SpeedCompliance floors (s_loop 48, hill 40) remain the spe
 Traj 95.9 / RMSE 0.083; hairpin 97.5 / Traj 93.3 / RMSE 0.135 (gain 1.0 gives 97.8 / 95.2 / 0.095 — the FF gain is
 speed-dependent, T-STANLEY-FF-SPEED-MAP); **mixed 97.8** vs the same-night production control **93.0** (baseline 98.3;
 the LMPC R200 weave is production-side, 3/5 both arms) — Stanley holds the R40 approach at 5.8–11.8 m/s to 0.17–0.24 m
-where PP diverged to 1.05. Promotion options: A) cap 20 + gain 1.0 — mixed 96.5 / s_loop 93.6 / hairpin 97.8; B) cap 20 + gain 0.78 — mixed 97.8 / s_loop 94.3 / hairpin 97.5. **Recommend B** (wins 2/3 and the total; 0.78 is the measured delivery ratio for the 5–11 m/s band); T-STANLEY-FF-SPEED-MAP next. **PROMOTED 2026-10-16 (option B, user decision).** Production now runs the corrected Stanley law on tight curves at all
+where PP diverged to 1.05. Promotion options: A) cap 20 + gain 1.0 — mixed 96.5 / s_loop 93.6 / hairpin 97.8; B) cap 20 + gain 0.78 — mixed 97.8 / s_loop 94.3 / hairpin 97.5. **Recommend B** (wins 2/3 and the total; 0.78 is the measured delivery ratio for the 5–11 m/s band); T-STANLEY-FF-SPEED-MAP next. **PROMOTED 2026-10-16 (option B, user decision).** Independent 2-run sample 2026-10-17 00:11–00:25 reproduces it: mixed 97.2, hairpin 97.1, s_loop 94.3, hill 97.5, highway 99.8, sweeping 99.4; Safety 100 / OOL 0 everywhere (journal #62). Production now runs the corrected Stanley law on tight curves at all
 speeds; the legacy values remain as kill-switch positions. Both scorer registry frames are active (goldens unchanged).
+
+
+**2026-10-17 00:46 — LMPC inter-frame writer was fed UNSIGNED curvature (journal #61; T-LATERAL-DUAL-CURVATURE-SIGN part 2).**
+The orchestrator's inter-frame context hands `compute_interframe_steering` Unity's unsigned `groundTruthPathCurvature`, so
+57 % of LMPC commands carried a wrong-way feedforward on every right-hand curve while the camera-frame writer ran on the
+signed horizon. Harness (new `interframe_curvature="unsigned_like_production"` option): inter/camera command ratio 0.71
+signed vs 0.28 unsigned on a right curve, steady offset 2×. The first Unity A/B (00:27) was INVALID — both arms ran gt_current (BSD sed `\s` pattern never switched the key; caught
+by the runtime snapshot at 01:15 before promotion). Kill-switch `trajectory.mpc.mpc_interframe_curvature_source: map_signed`
+(legacy gt_current). **Valid A/B 01:03–01:20 (snapshot-verified, 4 runs/arm): mixed 96.2 → 98.8 (Traj 91.0 → 96.2, Control 88.7 → 98.1,
+arc RMSE 0.189 → 0.100, no weave growth in any run); sweeping 99.3 → 99.2. PROMOTED 2026-10-17 01:25 (user: "Both").**
 
 **Harness lesson:** the kinematic plant is invalid at R15 for EVERY controller (PP diverges 49 m) and emits both
 curvature fields from one path — it found the sign/units/forwarding defects in its calibrated regime and could not see

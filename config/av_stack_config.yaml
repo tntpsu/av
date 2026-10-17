@@ -966,6 +966,9 @@ trajectory:
     mpc_ff_decomposition_enabled: true
     # Steering actuator model
     mpc_curvature_sign: -1.0               # PROMOTED 2026-10-11 (valid A/B, sign applied in MPCController for both writers): the heading row makes +κ demand a right turn while the orchestrator's +κ is left, so 1.0 ran a wrong-way feedforward on every arc. 5 pairs/track: highway 99.4→99.8 (Traj 98.2→99.1), sweeping 98.2→99.0 (Traj 92.8→96.0), hill 94.4→94.1 (offset +0.05 out → −0.07 in), mixed@9.8 96.6→95.9 (bimodal Control, steering p95 0.26→0.42 — watch), mixed@11.6 margin unchanged. 1.0 = legacy kill-switch. tests/test_lateral_sign_contract.py
+    # 2026-10-17: curvature handed to the INTER-FRAME LMPC writer. gt_current (legacy) = Unity's groundTruthPathCurvature,
+    # which is UNSIGNED -> wrong-way FF on right-hand curves for ~57 % of LMPC commands. map_signed = signed map κ at the car.
+    mpc_interframe_curvature_source: map_signed   # PROMOTED 2026-10-17 (journal #61, valid snapshot-verified A/B: mixed 96.2->98.8) | gt_current = legacy (unsigned GT curvature)
     mpc_actuator_model_enabled: true
     mpc_actuator_tau_s: 0.25
     mpc_actuator_speed_gate_mps: 9.0       # >0 = actuator model active only above this speed (two-solver dispatch, hysteresis 0.5); 0 = ungated. Targets the high-speed margin without the low-speed curve offset (T-LATERAL-LMPC-SPEED-MARGIN 2026-10-12)
