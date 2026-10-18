@@ -66,6 +66,14 @@ unsigned planner value). Validation ×2 vs today's legacy ×3: mixed 97.8→98.8
 unchanged; recorded reference curvature +0.0033 on sweeping (left), −0.0050 on mixed (right). Full suite 2796 passed.
 Running in the working tree (gt_map on); commit pending.
 
+
+**2026-10-17 21:3x — PROMOTED: steer-command interface (T-STANLEY-FF-SPEED-MAP, journal #66).** Stanley's radians are now
+normalized by Unity's per-frame max steer (Lerp 30°→16° over 0→12 m/s, `vehicle/max_steer_angle_deg_at_speed`) instead of a
+fixed 30° + the 0.78 constant. A/B ×5 (arms asserted from recordings): hairpin 97.5→97.8, **Trajectory 93.9→95.0** (first ≥95;
+Perception 94.0 is its only sub-95 layer), arc RMSE 0.192→0.158; s_loop 94.4→94.6, Traj 96.0→96.8; mixed 98.9=, arc RMSE
+0.139→0.090; highway/sweeping =; hill 98.4→97.8 (Control 99.2→94.2 on 2 runs — within its known band; nightly to confirm).
+Full suite 2821 passed. Follow-ups: T-STANLEY-ENTRY-SATURATION, T-STEER-INTERFACE-PP-LMPC.
+
 **Harness lesson:** the kinematic plant is invalid at R15 for EVERY controller (PP diverges 49 m) and emits both
 curvature fields from one path — it found the sign/units/forwarding defects in its calibrated regime and could not see
 the two convention defects; Unity was the verdict on every tight-curve claim tonight.

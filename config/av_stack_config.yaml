@@ -39,17 +39,21 @@ control:
     #   the lane-centre convention, the exact negative (corr −1.000); legacy false = inverted cross-track feedback.
     #   output_units: 'radians' normalizes the law's radian sum by 30° like PP (legacy passed it through ×0.7 ≈ 0.37×).
     stanley_cross_track_source_aware: true   # PROMOTED 2026-10-16
-    stanley_output_units: radians   # PROMOTED 2026-10-16 | normalized_legacy
+    stanley_output_units: radians_speed_map   # PROMOTED 2026-10-17 (steer-command interface, journal #66) | radians (fixed 30°, promoted 10-16) | normalized_legacy
     #   heading_source: 'gt_path_tangent' feeds Stanley the path-tangent heading error (headingDeltaDeg) instead of PP's
     #   pursuit angle, which contains cross-track (corr +0.59 with offset) and fights the cross-track term (0.4 Hz weave).
     stanley_heading_source: gt_path_tangent   # PROMOTED 2026-10-16 | pp_heading_to_ref
     #   ff_plant_gain: measured steering delivery ratio (sysid 2026-10-11: 0.78); FF = -atan(L·κ)/gain. 1.0 = legacy.
-    stanley_ff_plant_gain: 0.78   # PROMOTED 2026-10-16 (option B; right for 5–11 m/s; see T-STANLEY-FF-SPEED-MAP)
+    stanley_ff_plant_gain: 0.78   # used ONLY in the fixed-30° 'radians' mode (promoted 10-16); ignored by radians_speed_map, which reads the plant's map
     #   ff_preview_tau_s: evaluate the FF curvature v·τ ahead on the map horizon (measured plant lag 0.35 s). 0 = at-car.
     stanley_ff_preview_tau_s: 0.35   # PROMOTED 2026-10-16 (measured plant lag; neutral at s_loop speed)
     #   ff_curvature_source: 'map_horizon' (+left, matches the FF formula; preview via ff_preview_tau_s) |
     #   'reference_point' (legacy; +RIGHT field → FF steers OUT of the curve — the 2026-10-15 finding).
     stanley_ff_curvature_source: map_horizon   # PROMOTED 2026-10-16 | reference_point (+right field; inverts the FF)
+    #   max_steer_source: 'unity_state' reads Unity's per-frame maxSteerAtSpeedDeg (Lerp 30->16 deg over 0->12 m/s) for the
+    #   'radians_speed_map' output mode (steer-command interface, T-STANLEY-FF-SPEED-MAP); 'mirror' uses the Python copy.
+    #   In 'radians_speed_map' the FF plant gain is ignored (the map replaces the constant).
+    stanley_max_steer_source: unity_state   # unity_state | mirror
     # PP residual PID (hill_highway oscillation mitigation): slightly lower feedback vs error loop.
     # 2026-03-22: 0.070 A/B vs 0.075 failed promotion (see GRADE_LATERAL_TUNING.md); keep 0.075 until a gated win.
     pp_feedback_gain: 0.075

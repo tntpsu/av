@@ -513,3 +513,24 @@ held — the LMPC curvature ceiling (`map κ ≥ mpc_max_map_curvature`, preview
 `reference_curvature_sign_source: gt_map`; inter-frame writer `mpc_interframe_curvature_source: map_signed`), so both LMPC
 writers and all `reference_point['curvature']` consumers share one convention (T-LATERAL-DUAL-CURVATURE-SIGN). **Harness limit:** `tests/test_lateral_sign_contract.py`'s plant is invalid at R15 for every controller
 (PP diverges 49 m) and emits both curvature fields from one path — Unity is the verdict on tight curves.
+
+## Steer-command interface (2026-10-17, T-STANLEY-FF-SPEED-MAP)
+
+Unity applies a normalized command as `desiredSteerAngle = steerInput × Lerp(30°, 16°, v / 12 m/s)` (CarController.cs),
+then a 0.25 s actuator filter and a 90°/s rate limit. Every controller here computes a wheel angle in radians and used to
+normalize it by a **fixed 30°**, so the delivered angle was the command × r(v) = 1 − 0.467·min(v/12, 1) — 0.875 at
+3.2 m/s, 0.79 at 5.3, 0.55 at 11.6 (verified from recordings: steering_angle_actual / steering_input matches the Lerp
+within 1° from 2–10 m/s; above 10 m/s the measured ratio also carries actuator dynamics).
+
+`control/steer_interface.py` is the actuator-interface layer: `resolve_max_steer_rad(v, plant_deg)` prefers Unity's
+per-frame `maxSteerAtSpeedDeg` (CarController → bridge model `VehicleState.maxSteerAtSpeedDeg` → orchestrator
+`current_state['max_steer_angle_deg_at_speed']` → recorded as `vehicle/max_steer_angle_deg_at_speed`), falling back to the
+documented mirror `unity_max_steer_rad(v)`; `steer_rad_to_normalized(delta, max_steer)` converts the law's radians.
+Stanley uses it under `stanley_output_units: radians_speed_map` (the fixed-30° `radians` mode and `normalized_legacy`
+remain kill-switch positions); in that mode `stanley_ff_plant_gain` is ignored — the map replaces the constant that could
+only be right at one speed (0.78 fit s_loop's 5.3 m/s, over-steered hairpin's 3.4 m/s). The normalization actually used
+is recorded per frame as `control/stanley_max_steer_rad_used` so an A/B arm can be asserted from the recording.
+**Rule for any new Unity field:** four hops — C# state struct, bridge Pydantic model (undeclared fields are dropped by
+`model_dump()`), orchestrator state dict, recorder (6-location pattern) — and a static check on a recording.
+Follow-ups: T-STEER-INTERFACE-PP-LMPC (PP's `np.radians(30.0)` at two sites; the LMPC actuator ratio),
+T-STANLEY-ENTRY-SATURATION (23 % of hairpin entry frames at the 0.7 clip, untouched by the interface).

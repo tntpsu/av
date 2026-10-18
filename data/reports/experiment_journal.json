@@ -1405,5 +1405,35 @@
     "superseded_by": null,
     "resolved_by": null,
     "next": "Commit (user); then T-STANLEY-FF-SPEED-MAP; speed-owner consolidation."
+  },
+  {
+    "date": "2026-10-17",
+    "target_metric": "T-STANLEY-FF-SPEED-MAP \u2014 steer-command interface normalized by Unity's speed-dependent max steer (plan approved 19:xx)",
+    "target_track": "hairpin_15 (primary), s_loop, mixed_radius",
+    "approach": "New control/steer_interface.py (unity_max_steer_rad mirror of CarController Lerp(30,16,v/12); resolve_max_steer_rad prefers Unity's per-frame maxSteerAtSpeedDeg; steer_rad_to_normalized). Stanley mode stanley_output_units=radians_speed_map normalizes the law's radians by the plant's max steer at the current speed and IGNORES stanley_ff_plant_gain (the map replaces the constant). Unity reports maxSteerAtSpeedDeg per frame (CarController.cs); recorded as vehicle/max_steer_angle_deg_at_speed; the normalization used is recorded as control/stanley_max_steer_rad_used (A/B arm assertion). Kill-switches: output_units (radians = promoted legacy), stanley_max_steer_source (unity_state | mirror).",
+    "fix_level": "ARCHITECTURE (actuator-interface layer)",
+    "hypothesis": "Delivered wheel angle equals the law at every speed: hairpin mid-arc FF 11.3\u00b0\u219210.2\u00b0 (needed 9.9\u00b0), s_loop gain preserved (1.255 vs 1.28), mixed R40 approach FF \u00d71.45\u20131.8 (exact). Expected hairpin Traj 94.3\u2192\u226595 if the saturated entry (23 % of entry frames at the 0.7 clip, untouched here) does not dominate.",
+    "outcome": "PROMOTED 2026-10-17 (user: \"go\") \u2014 tight tracks improved, gentle unchanged (hill Control 2-run band noted)",
+    "outcome_status": "PROMOTED",
+    "metric_before": 93.9,
+    "metric_after": 95.0,
+    "root_cause_detail": "Mechanism verification: hairpin worst frames (3.2 m/s, +0.51 m, cmd \u22120.700) are clip-saturated \u2192 unchanged by the map; the other 91 % of arc frames change (FF exactness, feedback \u00d71/r). Recorded delivery ratio matches the Unity Lerp within 1\u00b0 from 2\u201310 m/s; above 10 m/s the measured 11\u00b0 is actuator dynamics (the LMPC's 0.78 quantity), not the static map. STATIC CHECK #1 (20:11): rebuild OK, but vehicle/max_steer_angle_deg_at_speed was NaN on every frame \u2014 the bridge validates Unity's JSON through a Pydantic VehicleState model and model_dump() drops undeclared fields (the plan's Phase C listed \"bridge changes if Unity data is needed\" and I skipped it). Fixed: maxSteerAtSpeedDeg: Optional[float] = None in bridge/server.py (+ test). Lesson: a new Unity field needs FOUR hops (C# struct, bridge model, orchestrator state dict, recorder), and the static check is what catches a missed one. A/B 20:16\u201321:1x (5/arm, arm asserted via snapshot + control/stanley_max_steer_rad_used): hairpin 97.5\u219297.8, Traj 93.9\u219295.0 (FIRST \u226595), arc RMSE 0.192\u21920.158, Perception 94.0 the only sub-95 layer; s_loop 94.4\u219294.6, Traj 96.0\u219296.8, RMSE 0.090\u21920.072; mixed 98.9=98.9, Traj 96.4=, RMSE 0.139\u21920.090. Control 100 (hairpin, s_loop), 98.9 (mixed). Steering-rate RMS +0.03\u20130.05/s (hairpin 0.39\u21920.42, s_loop 0.37\u21920.42) \u2014 noted vs the guardrail, no Control deduction. Safety 100 / OOL 0 on all 30 runs. Gentle \u00d72: highway 99.7\u219299.8, sweeping 99.3\u219299.2, hill 98.4\u219297.8 (Control 99.2\u219294.2 \u2014 within hill's known 94\u2013100 band; Stanley touches hill only at launch; nightly to confirm). Full suite 2821 passed.",
+    "iterations_spent": 0,
+    "files_changed": [
+      "control/steer_interface.py",
+      "control/pid_controller.py",
+      "av_stack/orchestrator.py",
+      "data/formats/data_format.py",
+      "data/recorder.py",
+      "config/av_stack_config.yaml",
+      "unity/AVSimulation/Assets/Scripts/CarController.cs",
+      "tests/test_steer_interface.py",
+      "tests/test_stanley_tight_curve_contract.py",
+      "bridge/server.py",
+      "tests/test_bridge_sync_packets.py"
+    ],
+    "superseded_by": null,
+    "resolved_by": null,
+    "next": "Static check (field recorded \u2248 mirror); A/B P=radians/0.78 vs M=radians_speed_map \u00d75 on the tight tracks + \u00d72 gentle; promotion = user decision; file T-STANLEY-ENTRY-SATURATION and T-STEER-INTERFACE-PP-LMPC."
   }
 ]

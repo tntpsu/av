@@ -91,7 +91,8 @@ work on a missing `TESTS.md`.
 - **Target speed:** 12.0 m/s
 - **Tight-curve lateral (PROMOTED 2026-10-16, option B):** classical Stanley takes PP's slot on map κ ≥ 0.015 at all speeds ≤ 20 m/s
   (`control.regime.stanley_tight_curve_routing`); its law fixes live under `control.lateral.stanley_*` (source-aware
-  sign, `radians` units, `gt_path_tangent` heading, `map_horizon` FF with 0.35 s lag-preview, plant gain 0.78). See architecture.md
+  sign, `radians` units, `gt_path_tangent` heading, `map_horizon` FF with 0.35 s lag-preview, `radians_speed_map` steer-command interface fed by
+  Unity's per-frame `maxSteerAtSpeedDeg` — PROMOTED 2026-10-17; the 0.78 gain is only the legacy `radians` mode's). See architecture.md
   "Stanley tight-curve controller". Every curvature is signed **+left** since 2026-10-17: Unity's `GetPathCurvature` (axis fix in GroundTruthReporter.cs),
   `reference_point['curvature']` (`trajectory.reference_curvature_sign_source: gt_map`) and `curvature_horizon_signed` share one
   convention (T-LATERAL-DUAL-CURVATURE-SIGN resolved). Before that date `reference_point['curvature']` and the GT field were UNSIGNED.

@@ -1637,6 +1637,21 @@ Car now reaches 25 m/s (11.7% overspeed rate at target=25). Speed RMSE 5.3 m/s =
 ---
 
 
+### T-STANLEY-ENTRY-SATURATION — hairpin entry frames saturate the 0.7 steering clip (filed 2026-10-17)
+On the promoted Stanley stack, 23 % of hairpin_15 R15 **entry** frames (9 % of the arc, 0 % on s_loop) sit at the ±0.7
+normalized clip (at 3.2 m/s that is 18° of Unity's 26°), with the car ~0.5 m outside; entry at-car RMSE 0.260 vs mid-arc
+0.165 vs exit 0.081. The steer-command interface (T-STANLEY-FF-SPEED-MAP) cannot change saturated frames. Options, in
+order: (1) give Stanley Pure Pursuit's `dynamic_curve_hard_clip_boost` path (clip opens up to +0.12 on a rate deficit,
+pid_controller.py ~1940); (2) an actuator-aware entry FF (the 0.25 s time constant + 90°/s rate limit vs the κ step at
+R15 entry); (3) a curve-entry speed shaping question for the velocity profile. No tuning of the 0.7 constant without a
+named mechanism. Evidence: journal #66 mechanism table.
+
+### T-STEER-INTERFACE-PP-LMPC — same fixed-30° normalization in Pure Pursuit and the LMPC (filed 2026-10-17)
+PP normalizes `steering_rad / np.radians(30.0)` (pid_controller.py ~1717, ~1825); the LMPC's actuator model carries the
+dynamic flavour of the same ratio (`actuator_gain_ratio` / `steer_gain_ratio` 0.78, measured at 11–13 m/s). Once the
+Stanley interface is promoted, route PP (fallback only) and the LMPC's command through `control/steer_interface.py`
+(plant-reported max steer per frame) and re-derive the LMPC actuator gain as dynamics-only. Each is its own A/B.
+
 ### T-STANLEY-FF-SPEED-MAP — Stanley feedforward normalized by the speed-dependent steer map (2026-10-15)
 **Found in the final ×5 (journal #58).** A constant FF plant gain cannot be right at two speeds: 0.78 helps s_loop at
 5.3 m/s (at-car RMSE 0.112→0.083, Traj 94.4→95.9) and hurts hairpin_15 at 4 m/s (0.095→0.135, Traj 95.2→93.3).
