@@ -575,6 +575,7 @@ class DataRecorder:
             maxshape=max_shape,
             dtype=np.float32
         )
+        self.h5_file.create_dataset("vehicle/max_steer_angle_deg_at_speed", shape=(0,), maxshape=(None,), dtype=np.float32)
         self.h5_file.create_dataset(
             "vehicle/steering_angle_actual",
             shape=(0,),
@@ -2840,6 +2841,7 @@ class DataRecorder:
         self.h5_file.create_dataset("control/regime_lateral_accel_threshold_mps2", shape=(0,), maxshape=max_shape, dtype=np.float32)
         self.h5_file.create_dataset("control/stanley_active", shape=(0,), maxshape=max_shape, dtype=np.float32)
         self.h5_file.create_dataset("control/stanley_heading_term", shape=(0,), maxshape=max_shape, dtype=np.float32)
+        self.h5_file.create_dataset("control/stanley_max_steer_rad_used", shape=(0,), maxshape=max_shape, dtype=np.float32)
         self.h5_file.create_dataset("control/stanley_crosstrack_term", shape=(0,), maxshape=max_shape, dtype=np.float32)
         self.h5_file.create_dataset("control/mpc_recovery_mode_suppressed", shape=(0,), maxshape=max_shape, dtype=np.int8)
         self.h5_file.create_dataset("control/mpc_last_steering_pre_modify", shape=(0,), maxshape=max_shape, dtype=np.float32)
@@ -5377,6 +5379,7 @@ class DataRecorder:
         force_fallback_active = []
         steering_angles = []
         steering_angles_actual = []
+        max_steer_angles_deg_at_speed = []
         steering_inputs = []
         desired_steer_angles = []
         motor_torques = []
@@ -5763,6 +5766,7 @@ class DataRecorder:
             steering_angles_actual.append(
                 vs.steering_angle_actual if vs.steering_angle_actual is not None else 0.0
             )
+            max_steer_angles_deg_at_speed.append(float(getattr(vs, 'max_steer_angle_deg_at_speed', float('nan')) or float('nan')))
             steering_inputs.append(getattr(vs, 'steering_input', 0.0))
             desired_steer_angles.append(getattr(vs, 'desired_steer_angle', 0.0))
             motor_torques.append(vs.motor_torque)
@@ -6524,7 +6528,7 @@ class DataRecorder:
                        "wheel_grounded_count",
                        "wheel_colliders_ready",
                        "force_fallback_active",
-                      "steering_angle", "steering_angle_actual",
+                      "steering_angle", "steering_angle_actual", "max_steer_angle_deg_at_speed",
                       "steering_input", "desired_steer_angle",
                        "motor_torque", "brake_torque", "camera_8m_screen_y",
                        "camera_lookahead_screen_y", "ground_truth_lookahead_distance",
@@ -6706,6 +6710,7 @@ class DataRecorder:
             )
             self.h5_file["vehicle/steering_angle"][current_size:] = steering_angles
             self.h5_file["vehicle/steering_angle_actual"][current_size:] = steering_angles_actual
+            self.h5_file["vehicle/max_steer_angle_deg_at_speed"][current_size:] = max_steer_angles_deg_at_speed
             self.h5_file["vehicle/steering_input"][current_size:] = steering_inputs
             self.h5_file["vehicle/desired_steer_angle"][current_size:] = desired_steer_angles
             self.h5_file["vehicle/motor_torque"][current_size:] = motor_torques
@@ -7845,6 +7850,7 @@ class DataRecorder:
         regime_lateral_accel_threshold_mps2_list = []
         stanley_active_list = []
         stanley_heading_term_list = []
+        stanley_max_steer_rad_used_list = []
         stanley_crosstrack_term_list = []
         mpc_recovery_mode_suppressed_list = []
         mpc_last_steering_pre_modify_list = []
@@ -9335,6 +9341,7 @@ class DataRecorder:
             regime_lateral_accel_threshold_mps2_list.append(float(getattr(cc, 'regime_lateral_accel_threshold_mps2', 0.0)))
             stanley_active_list.append(float(getattr(cc, 'stanley_active', 0.0)))
             stanley_heading_term_list.append(float(getattr(cc, 'stanley_heading_term', 0.0)))
+            stanley_max_steer_rad_used_list.append(float(getattr(cc, 'stanley_max_steer_rad_used', float('nan')) or float('nan')))
             stanley_crosstrack_term_list.append(float(getattr(cc, 'stanley_crosstrack_term', 0.0)))
             mpc_recovery_mode_suppressed_list.append(int(getattr(cc, 'mpc_recovery_mode_suppressed', False)))
             mpc_last_steering_pre_modify_list.append(float(getattr(cc, 'mpc_last_steering_pre_modify', 0.0)))
@@ -9730,7 +9737,7 @@ class DataRecorder:
                        "mpc_kappa_preview_used", "mpc_kappa_preview_range",
                        "regime", "regime_blend_weight",
                        "regime_lateral_accel_mps2", "regime_lateral_accel_threshold_mps2",
-                       "stanley_active", "stanley_heading_term", "stanley_crosstrack_term",
+                       "stanley_active", "stanley_heading_term", "stanley_crosstrack_term", "stanley_max_steer_rad_used",
                        "mpc_recovery_mode_suppressed",
                        "mpc_last_steering_pre_modify", "mpc_last_steering_actual",
                        "mpc_rate_limiter_active",
@@ -10999,6 +11006,7 @@ class DataRecorder:
             self.h5_file["control/regime_lateral_accel_threshold_mps2"][current_size:] = regime_lateral_accel_threshold_mps2_list
             self.h5_file["control/stanley_active"][current_size:] = stanley_active_list
             self.h5_file["control/stanley_heading_term"][current_size:] = stanley_heading_term_list
+            self.h5_file["control/stanley_max_steer_rad_used"][current_size:] = stanley_max_steer_rad_used_list
             self.h5_file["control/stanley_crosstrack_term"][current_size:] = stanley_crosstrack_term_list
             self.h5_file["control/mpc_recovery_mode_suppressed"][current_size:] = mpc_recovery_mode_suppressed_list
             self.h5_file["control/mpc_last_steering_pre_modify"][current_size:] = mpc_last_steering_pre_modify_list

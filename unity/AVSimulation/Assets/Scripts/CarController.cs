@@ -167,6 +167,7 @@ public class CarController : MonoBehaviour
     private float lastSteerInput = 0f;
     private float steeringAngleActual = 0f;
     private float desiredSteerAngle = 0f;
+    private float maxSteerAtSpeedDegCurrent = 30f;  // Lerp(30,16,v/12) evaluated this physics step; reported to the stack (steer-command interface)
 
     private WheelCollider frontLeftWheel;
     private WheelCollider frontRightWheel;
@@ -1400,6 +1401,7 @@ public class CarController : MonoBehaviour
                 maxSteerAngleHighSpeed,
                 Mathf.InverseLerp(0f, maxSteerAngleFullSpeed, currentSpeed)
             );
+            maxSteerAtSpeedDegCurrent = maxSteerAtSpeed;
             desiredSteerAngle = adjustedSteerInput * maxSteerAtSpeed;
             float actuatorAlpha = steeringTimeConstant > 0.0f
                 ? Time.fixedDeltaTime / (steeringTimeConstant + Time.fixedDeltaTime)
@@ -1764,6 +1766,7 @@ public class CarController : MonoBehaviour
             speed = groundTruthMode ? groundTruthSpeed : rb.linearVelocity.magnitude,
             steeringAngle = desiredSteerAngle,
             steeringAngleActual = actualSteeringAngle,
+            maxSteerAtSpeedDeg = maxSteerAtSpeedDegCurrent,
             steeringInput = steerInput,
             desiredSteerAngle = desiredSteerAngle,
             motorTorque = throttleInput * motorForce,
@@ -1859,6 +1862,7 @@ public class VehicleState
     public float speed;
     public float steeringAngle;
     public float steeringAngleActual;
+    public float maxSteerAtSpeedDeg;  // Unity's max steer at the current speed (deg) — the plant's normalization full-scale
     public float steeringInput;
     public float desiredSteerAngle;
     public float motorTorque;

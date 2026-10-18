@@ -122,7 +122,7 @@ class TestKillSwitchDefaults:
         lat = cfg['control']['lateral']
         # PROMOTED 2026-10-16 (option B) — production runs the corrected law; legacy values remain kill-switch positions.
         assert lat.get('stanley_cross_track_source_aware') is True
-        assert lat.get('stanley_output_units') == 'radians'
+        assert lat.get('stanley_output_units') == 'radians_speed_map'   # PROMOTED 2026-10-17 (steer-command interface)
 
 
 def _stanley_cfg_h(source: str) -> dict:
@@ -161,8 +161,9 @@ class TestFeedforwardPlantGainCompensation:
     by a persistent cross-track error (Phase 1b s_loop −0.124 m, hairpin ≈0.2 m); dividing the FF by the measured
     ratio lets feedforward hold the arc."""
 
-    def test_production_gain_is_the_measured_delivery_ratio(self):
-        assert _production_cfg()['control']['lateral'].get('stanley_ff_plant_gain') == 0.78   # PROMOTED 2026-10-16 (option B)
+    def test_production_gain_constant_is_kept_only_for_the_legacy_radians_mode(self):
+        lat = _production_cfg()['control']['lateral']
+        assert lat.get('stanley_ff_plant_gain') == 0.78 and lat.get('stanley_output_units') == 'radians_speed_map'   # ignored in production (the map replaces it)
 
     def test_ff_is_divided_by_the_plant_gain(self):
         lc = _lc(ff=True, units='radians'); lc.stanley_ff_plant_gain = 0.78
@@ -208,5 +209,48 @@ class TestFeedforwardCurvatureSource:
 
     def test_map_horizon_source_at_zero_tau_matches_at_car_on_a_constant_arc(self):
         cfg = _stanley_cfg_h('gt_path_tangent'); cfg['control']['lateral'].update({'stanley_curvature_ff_enabled': True, 'stanley_ff_curvature_source': 'map_horizon', 'stanley_ff_preview_tau_s': 0.0})
+        r = run_closed_loop(0.005, 8.0, n_frames=500, cfg=cfg)
+        assert np.abs(r['d']).max() < 0.25
+
+
+from control.steer_interface import unity_max_steer_rad  # noqa: E402
+
+
+class TestSpeedMapNormalization:
+    """'radians_speed_map' (T-STANLEY-FF-SPEED-MAP): the law's radians are normalized by the plant's max steer AT THIS
+    SPEED (Unity Lerp 30°→16° over 0→12 m/s) so the delivered wheel angle equals the law at every speed; the fixed-30°
+    modes under-deliver by r(v) and needed stanley_ff_plant_gain 0.78 — right at s_loop's 5.3 m/s (ideal 1.26),
+    over-steering hairpin at 3.4 m/s (ideal 1.14). The constant is ignored in this mode."""
+
+    def test_scales_the_radians_mode_by_30deg_over_max_at_speed(self):
+        a = _lc(units='radians').compute_stanley_from_errors(0.0, 0.10, 5.3)
+        b = _lc(units='radians_speed_map').compute_stanley_from_errors(0.0, 0.10, 5.3)
+        assert b['steering_normalized'] == pytest.approx(a['steering_normalized'] * np.radians(30.0) / unity_max_steer_rad(5.3))
+        assert b['stanley_max_steer_rad_used'] == pytest.approx(unity_max_steer_rad(5.3))
+
+    def test_reproduces_the_promoted_gain_at_s_loop_speed_and_a_smaller_one_at_hairpin_speed(self):
+        assert np.radians(30.0) / unity_max_steer_rad(5.2) == pytest.approx(1.26, abs=0.02)   # ≈ today's 1/0.78 = 1.28
+        assert np.radians(30.0) / unity_max_steer_rad(3.4) == pytest.approx(1.15, abs=0.02)   # < 1.28: hairpin over-steer gone
+
+    def test_plant_reported_max_steer_is_preferred(self):
+        r = _lc(units='radians_speed_map').compute_stanley_from_errors(0.0, 0.10, 5.3, max_steer_rad_at_speed=np.radians(20.0))
+        assert r['stanley_max_steer_rad_used'] == pytest.approx(np.radians(20.0))
+        assert r['steering_normalized'] == pytest.approx(0.10 / np.radians(20.0))
+
+    def test_ff_plant_gain_is_ignored_in_speed_map_mode(self):
+        a = _lc(ff=True, units='radians_speed_map'); a.stanley_ff_plant_gain = 0.78
+        b = _lc(ff=True, units='radians_speed_map'); b.stanley_ff_plant_gain = 1.0
+        ra = a.compute_stanley_from_errors(0, 0, 3.4, curvature=+1 / 15); rb = b.compute_stanley_from_errors(0, 0, 3.4, curvature=+1 / 15)
+        assert ra['stanley_curvature_ff_term'] == pytest.approx(rb['stanley_curvature_ff_term']) == pytest.approx(-np.arctan(2.7 / 15))
+
+    def test_legacy_modes_are_bit_exact(self):
+        for units in ('normalized_legacy', 'radians'):
+            lc = _lc(ff=True, units=units); lc.stanley_ff_plant_gain = 0.78
+            r = lc.compute_stanley_from_errors(0.1, 0.05, 4.0, curvature=+1 / 15)
+            assert r['stanley_curvature_ff_term'] == pytest.approx(-np.arctan(2.7 / 15) / 0.78)
+            assert np.isnan(r['stanley_max_steer_rad_used'])
+
+    def test_r200_hold_in_the_calibrated_regime(self):
+        cfg = _stanley_cfg_h('gt_path_tangent'); cfg['control']['lateral'].update({'stanley_output_units': 'radians_speed_map', 'stanley_curvature_ff_enabled': True, 'stanley_ff_curvature_source': 'map_horizon', 'stanley_max_steer_source': 'mirror'})
         r = run_closed_loop(0.005, 8.0, n_frames=500, cfg=cfg)
         assert np.abs(r['d']).max() < 0.25

@@ -2378,6 +2378,9 @@ class VehicleState(BaseModel):
     speed: float
     steeringAngle: float
     steeringAngleActual: float = 0.0
+    # Unity's max steer at the current speed (deg): Lerp(30, 16, v/12). Steer-command interface (T-STANLEY-FF-SPEED-MAP).
+    # Optional so older players (no field) still validate; the stack falls back to the Python mirror when None.
+    maxSteerAtSpeedDeg: Optional[float] = None
     steeringInput: float = 0.0
     desiredSteerAngle: float = 0.0
     motorTorque: float

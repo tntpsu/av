@@ -783,3 +783,13 @@ def test_sync_packet_next_raw_rejects_complete_but_incoherent_packet(_reset_sync
         assert exc.headers["X-AV-Selection-Fallback-Active"] == "1"
 
     asyncio.run(_run())
+
+
+def test_vehicle_state_model_carries_unity_max_steer_at_speed():
+    """T-STANLEY-FF-SPEED-MAP: the bridge model must declare maxSteerAtSpeedDeg or model_dump() silently drops it
+    (that is exactly how the first static check saw NaN on every frame, 2026-10-17)."""
+    base = dict(position={"x": 0, "y": 0, "z": 0}, rotation={"x": 0, "y": 0, "z": 0, "w": 1}, velocity={"x": 0, "y": 0, "z": 0},
+                angularVelocity={"x": 0, "y": 0, "z": 0}, speed=5.3, steeringAngle=0.0, motorTorque=0.0, brakeTorque=0.0)
+    with_field = srv.VehicleState(**base, maxSteerAtSpeedDeg=23.8).model_dump()
+    assert with_field["maxSteerAtSpeedDeg"] == 23.8
+    assert srv.VehicleState(**base).model_dump()["maxSteerAtSpeedDeg"] is None   # older player → mirror fallback

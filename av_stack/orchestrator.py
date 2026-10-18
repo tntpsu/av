@@ -971,6 +971,7 @@ class AVStack:
             stanley_ff_plant_gain=lateral_cfg.get('stanley_ff_plant_gain', 1.0),
             stanley_ff_preview_tau_s=lateral_cfg.get('stanley_ff_preview_tau_s', 0.0),
             stanley_ff_curvature_source=lateral_cfg.get('stanley_ff_curvature_source', 'reference_point'),
+            stanley_max_steer_source=lateral_cfg.get('stanley_max_steer_source', 'unity_state'),
             pp_feedback_gain=lateral_cfg.get('pp_feedback_gain', 0.15),
             pp_min_lookahead=lateral_cfg.get('pp_min_lookahead', 0.5),
             pp_speed_norm_enabled=bool(
@@ -8682,6 +8683,8 @@ class AVStack:
                         vehicle_state_dict.get('steeringAngleActual',
                             vehicle_state_dict.get('steering_angle_actual', 0.0))
                     ),
+                    # Unity's max steer at the current speed (deg), per frame (T-STANLEY-FF-SPEED-MAP). NaN when absent.
+                    'max_steer_angle_deg_at_speed': float(vehicle_state_dict.get('maxSteerAtSpeedDeg', float('nan')) or float('nan')),
                 }
                 
                 # One-shot: apply Unity ground truth geometry to MPC params
@@ -10976,6 +10979,7 @@ class AVStack:
             steering_angle_actual=vehicle_state_dict.get(
                 'steeringAngleActual', vehicle_state_dict.get('steering_angle_actual', 0.0)
             ),
+            max_steer_angle_deg_at_speed=float(vehicle_state_dict.get('maxSteerAtSpeedDeg', float('nan')) or float('nan')),
             steering_input=vehicle_state_dict.get(
                 'steeringInput', vehicle_state_dict.get('steering_input', 0.0)
             ),
@@ -12654,6 +12658,7 @@ class AVStack:
             regime_lateral_accel_threshold_mps2=float(control_command.get('regime_lateral_accel_threshold_mps2', 0.0)),
             stanley_active=float(control_command.get('stanley_active', 0.0)),
             stanley_heading_term=float(control_command.get('stanley_heading_term', 0.0)),
+            stanley_max_steer_rad_used=float(control_command.get('stanley_max_steer_rad_used', float('nan')) or float('nan')),
             stanley_crosstrack_term=float(control_command.get('stanley_crosstrack_term', 0.0)),
             mpc_recovery_mode_suppressed=bool(control_command.get('mpc_recovery_mode_suppressed', False)),
             mpc_last_steering_pre_modify=float(control_command.get('mpc_last_steering_pre_modify', 0.0)),

@@ -31,6 +31,7 @@ class VehicleState:
     motor_torque: float
     brake_torque: float
     steering_angle_actual: float = 0.0
+    max_steer_angle_deg_at_speed: float = float('nan')  # Unity Lerp(30,16,v/12) at this frame (deg); NaN if not sent
     steering_input: float = 0.0
     desired_steer_angle: float = 0.0
     unity_time: float = 0.0
@@ -819,6 +820,7 @@ class ControlCommand:
     regime_lateral_accel_threshold_mps2: float = 0.0  # effective threshold with hysteresis (m/s²)
     stanley_active: float = 0.0        # 1.0 when Stanley formula applied this frame
     stanley_heading_term: float = 0.0  # Heading error component of Stanley steering (rad)
+    stanley_max_steer_rad_used: float = float('nan')  # Normalization used by the steer-command interface (rad); NaN unless radians_speed_map
     stanley_crosstrack_term: float = 0.0  # Cross-track arctan component of Stanley steering (rad)
     mpc_recovery_mode_suppressed: bool = False  # True when recovery ×1.2/×1.5 was skipped because MPC is active
     mpc_last_steering_pre_modify: float = 0.0   # Steering before orchestrator post-hoc modifications
