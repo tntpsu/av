@@ -551,5 +551,22 @@
     "prevention": "For any field named 'signed', assert on a single-direction track that frac<0 flips with direction (recordings-based contract test); one convention per physical quantity converted at the source.",
     "detection_method": "recordings: zero variance of reference_point_curvature across left and right arcs; sweeping (all left) never negative; C# read of GetPathCurvature",
     "detection_delay_iterations": 1
+  },
+  {
+    "date": "2026-10-17",
+    "commit_summary": "898606a feat(control): steer-command interface \u2014 Stanley normalized by Unity's speed-dependent max steer (radians_speed_map)",
+    "issue": "Controllers normalized their radian wheel-angle command by a fixed 30 deg while Unity applies Lerp(30,16,v/12) deg, so the delivered angle was the command x (1 - 0.467*min(v/12,1)); the 0.78 FF plant-gain constant could only be right at one speed (helped s_loop at 5.3 m/s, over-steered hairpin at 3.4 m/s).",
+    "deduction_eliminated": "hairpin Trajectory 93.9 -> 95.0 (first >= 95), arc RMSE 0.192 -> 0.158; s_loop Traj 96.0 -> 96.8; mixed arc RMSE 0.139 -> 0.090",
+    "tracks_affected": [
+      "hairpin_15",
+      "s_loop",
+      "mixed_radius"
+    ],
+    "root_cause": "No actuator-interface layer: the plant's declared, speed-dependent full-scale was hard-coded as a constant in the controllers and then patched with a fitted scalar.",
+    "process_stage": "design",
+    "process_sub": "design/missing-physics",
+    "prevention": "Controllers command physical angles; one interface converts them with the plant's declared map read per frame (never a fitted constant). Any new Unity field needs four hops (C# struct, bridge Pydantic model, orchestrator dict, recorder) and a static check on a recording.",
+    "detection_method": "journal #58 two-speed gain asymmetry -> CarController.cs Lerp -> recorded actual/input ratio by speed bin; snapshot/_used-asserted A/B",
+    "detection_delay_iterations": 1
   }
 ]
